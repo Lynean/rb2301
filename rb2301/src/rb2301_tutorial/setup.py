@@ -1,4 +1,5 @@
 from setuptools import find_packages, setup
+from glob import glob
 
 package_name = 'rb2301_tutorial'
 
@@ -10,6 +11,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/params', glob('params/*.yaml')),
+        ('share/' + package_name + '/launch', glob('launch/*.launch.py'))
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,6 +31,13 @@ setup(
             'fake = rb2301_tutorial.fake:main',
             'logger = rb2301_tutorial.logger:main',
             'recorder = rb2301_tutorial.recorder:main',
+            'pubs = rb2301_tutorial.publishers:main',
+            'subs = rb2301_tutorial.subscribers:main',
+            'prms = rb2301_tutorial.parameters:main',
+            'prms_srvs = rb2301_tutorial.parameter_services:main'
         ],
     },
 )
+
+
+

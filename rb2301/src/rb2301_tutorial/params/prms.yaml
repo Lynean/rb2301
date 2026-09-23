@@ -1,0 +1,11 @@
+parameters:
+  ros__parameters:
+    values:
+      bool_v: false
+      int_v: 3
+      dbl_v: 63.0
+      str_v: 'Nguyen'
+    bool_arr_v: [true, false]
+    int_arr_v: [6, 6, 3]
+    dbl_arr_v: [3.0, 3.0, 1.5]
+    str_arr_v: ['Nhien', 'Nguyen']

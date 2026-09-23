@@ -1,6 +1,6 @@
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -10,10 +10,10 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Text
 import sys, os
 sys.path.insert(2, os.path.dirname(os.path.realpath(__file__))[:-17]+'/rb2301_ca1/rb2301_ca1')
 print(os.path.dirname(os.path.realpath(__file__))[:-17])
-import obstacle_generator 
+import obstacle_generator
+
 
 def generate_launch_description():
-    obstacle_generator.generate_sdf_file()
     ld = LaunchDescription()
     pkg_rb2301_gz = FindPackageShare('rb2301_gz') 
     pkg_ros_gz_sim = FindPackageShare('ros_gz_sim')
@@ -47,6 +47,21 @@ def generate_launch_description():
         pkg_rb2301_gz, 'worlds', LaunchConfiguration('world')
     ])
     ld.add_action(arg_world)
+
+    scenario_arg = DeclareLaunchArgument(
+        'scenario',
+        default_value='random',
+        description="Obstacle layout: random, front_left, front_right, <<>>, >><<, track_right_open, or track_left_open",
+    )
+    ld.add_action(scenario_arg)
+
+    def generate_obstacle_world(context):
+        obstacle_generator.generate_sdf_file(
+            LaunchConfiguration('scenario').perform(context)
+        )
+        return []
+
+    ld.add_action(OpaqueFunction(function=generate_obstacle_world))
 
     # publishes the robot states into robot_description topic, along with transforms.
     robot_state_publisher_node = Node(
@@ -127,5 +142,3 @@ def generate_launch_description():
     ld.add_action(gz_bridge_node)
 
     return ld
-
-
