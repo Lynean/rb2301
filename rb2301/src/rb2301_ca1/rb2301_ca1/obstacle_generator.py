@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 import os
 
 height = 20
-size_div = 10
+size_div = 6
 width = 22
 randomise = True # if false it will not change
 
@@ -110,4 +110,4 @@ def generate_sdf_file(scenario='random'):
     tree.write(overwrite_file)
 
 if __name__ == '__main__':
-    generate_sdf_file()
+    generate_sdf_file(scenario= 'front_left')

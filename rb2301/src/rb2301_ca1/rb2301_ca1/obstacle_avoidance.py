@@ -26,7 +26,7 @@ class ObstacleAvoidanceNode(Node):
         self.scanner = 0
         self.scanner_dir = -2
         self.timer = self.create_timer(0.1, self.timer_callback)  # Runs at 20Hz. Can be changed.
-        self.current_bound = set(["left",])
+        self.current_bound = set(["right",])
         self.last_dir = 0
     def move_2D(self, x: float = 0.0, y: float = 0.0, turn: float = 0.0):
         """Publishes a twist command to move in 2D space. +ve x is forwards, +ve y is left, and +ve turn is anticlockwise"""
@@ -61,19 +61,19 @@ class ObstacleAvoidanceNode(Node):
         
         # print("Scans:", self.last_scan)
         #Is at left boundary
-        if all(self.last_scan[0:100] >= 19) and all(self.last_scan[-10:] >= 19):
+        if np.all(self.last_scan[0:100] >= 19) and np.all(self.last_scan[-10:] >= 19):
             self.current_bound.add("left")
             if "right" in self.current_bound:
                 self.current_bound.remove("right")
             
         #Is at right boundary
-        if all(self.last_scan[-100:] >= 19) and all(self.last_scan[:10] >= 19):
+        if np.all(self.last_scan[-100:] >= 19) and np.all(self.last_scan[:10] >= 19):
             self.current_bound.add("right")
             if "left" in self.current_bound:
                 self.current_bound.remove("left")
 
 
-        if all(self.last_scan[90:270]>=19):
+        if np.all(self.last_scan[90:270]>=19):
             self.current_bound.add("back")
         elif "back" in self.current_bound:
             self.current_bound.remove("back")
@@ -85,13 +85,27 @@ class ObstacleAvoidanceNode(Node):
 
         if not "front" in self.current_bound:
             self.current_bound.add("back")
+
+        last_scan_copy = self.last_scan.copy()
+        window_size = 90
+        window_start = 0
+        while window_start <= len(self.last_scan) - window_size:
+            window_end = window_start + window_size
+            if np.all(self.last_scan[window_start:window_end] == 20):
+                while window_end < len(self.last_scan) and self.last_scan[window_end] == 20:
+                    window_end += 1
+                #The further outside it is, the closer it is considered to be a boundary.
+                self.last_scan[window_start:window_end] = (360/(window_end-window_start))**2
+            window_start += 1
+        
+        self.last_scan = np.clip(self.last_scan, 0, 3)
         
         #Second Layer
         if "left" in self.current_bound:
-            self.last_scan[30:150] = 0.3
+            self.last_scan[0:150] = 0.3
             print("LEFT BOUNDARY")
         if "right" in self.current_bound:
-            self.last_scan[-150:-30]  = 0.3
+            self.last_scan[-150:]  = 0.3
             print("RIGHT BOUNDARY")
         if "back" in self.current_bound:
             print("BACK BOUNDARY")
@@ -100,21 +114,6 @@ class ObstacleAvoidanceNode(Node):
             print("FRONT BOUNDARY")
             self.last_scan[-85:] = 0.3
             self.last_scan[:85] = 0.3
-
-        last_scan_copy = self.last_scan.copy()
-        window_size = 80
-        window_start = 0
-        while window_start <= len(self.last_scan) - window_size:
-            window_end = window_start + window_size
-            if np.all(self.last_scan[window_start:window_end] == 20):
-                while window_end < len(self.last_scan) and self.last_scan[window_end] == 20:
-                    window_end += 1
-                self.last_scan[window_start:window_end] = 3
-            window_start += 1
-        
-        self.last_scan = np.clip(self.last_scan, 0, 3)
-        
-        
         
         self.last_scan = np.concatenate((self.last_scan, self.last_scan))
         window_size = 10
@@ -176,17 +175,17 @@ class ObstacleAvoidanceNode(Node):
         delta_y = max_translate_velocity*np.sin(dir)
         print("X,Y Original:", delta_x, delta_y)
         #Emergency
-        #if sth in front
+
         #print("Original scan:", last_scan_copy)
-        if np.any(last_scan_copy[-150:]<0.3) and np.any(last_scan_copy[:150]<0.3):
-            if np.min(last_scan_copy[-180:-30]) - np.min(last_scan_copy[30:180]) > 0.2:
+        if np.any(last_scan_copy[-180:-30]<0.2) and np.any(last_scan_copy[30:180]<0.2):
+            if np.min(last_scan_copy[-180:-30]) - np.min(last_scan_copy[30:180]) > 0.1:
                 self.current_bound.add("right")
                 if "left" in self.current_bound:
                     self.current_bound.remove("left")
                 #go left
                 delta_x = delta_x
                 delta_y = (delta_y if delta_y > 0 else 0)
-            elif np.min(last_scan_copy[-180:-60]) - np.min(last_scan_copy[60:180]) < -0.2:
+            elif np.min(last_scan_copy[-180:-60]) - np.min(last_scan_copy[60:180]) < -0.1:
                 self.current_bound.add("left")
                 if "right" in self.current_bound:
                     self.current_bound.remove("right")
@@ -196,26 +195,27 @@ class ObstacleAvoidanceNode(Node):
             else:
                 delta_x = delta_x
                 delta_y = 0
-        elif np.any(last_scan_copy[-180:-30]<0.3):
+        #if sth on left
+        elif np.any(last_scan_copy[-180:-60]<0.2):
             self.current_bound.add("right")
             if "left" in self.current_bound:
                 self.current_bound.remove("left")
             #go left
             delta_x = delta_x
             delta_y = (delta_y if delta_y > 0 else 0)
-        #if sth on left
-        elif np.any(last_scan_copy[30:180]<0.3):
+        #if sth on right
+        elif np.any(last_scan_copy[60:180]<0.2):
             self.current_bound.add("left")
             if "right" in self.current_bound:
                 self.current_bound.remove("right")
             #go right
             delta_x = delta_x
             delta_y = (delta_y if delta_y < 0 else 0)
-        if np.any(last_scan_copy[-80:] < 0.3) and np.any(last_scan_copy[:80] < 0.3):
+        if np.any(last_scan_copy[-60:] < 0.2) and np.any(last_scan_copy[:60] < 0.2):
             self.current_bound.add("front")
             if "back" in self.current_bound:
                 self.current_bound.remove("back")
-            delta_x = (delta_x if delta_x < 0 else -delta_x)
+            delta_x = (delta_x if delta_x < 0 else 0)
             delta_y = delta_y
         elif "front" in self.current_bound:
             self.current_bound.remove("front")
@@ -225,6 +225,10 @@ class ObstacleAvoidanceNode(Node):
 
         print(self.current_bound)
         print("X,Y New:", delta_x, delta_y)
+        #Prevent stopping completely
+        if delta_x**2 + delta_y**2 < 0.02:
+            delta_x = 0.02
+            delta_y = (0.02 if "left" in self.current_bound else -0.05)
         self.move_2D(delta_x,delta_y)
         self.last_scan = None
         
