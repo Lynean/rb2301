@@ -34,7 +34,8 @@ setup(
             'pubs = rb2301_tutorial.publishers:main',
             'subs = rb2301_tutorial.subscribers:main',
             'prms = rb2301_tutorial.parameters:main',
-            'prms_srvs = rb2301_tutorial.parameter_services:main'
+            'prms_srvs = rb2301_tutorial.parameter_services:main',
+            'sim = rb2301_tutorial.simulation:main',
         ],
     },
 )
