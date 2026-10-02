@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch.actions import SetEnvironmentVariable
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution, Command
+from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution, TextSubstitution
 
 import sys, os
 sys.path.insert(2, os.path.dirname(os.path.realpath(__file__))[:-17]+'/rb2301_ca1/rb2301_ca1')
@@ -31,7 +31,18 @@ def generate_launch_description():
     ld.add_action(arg_model)
 
     # for loading the model
-    env_gz = SetEnvironmentVariable("GAZEBO_MODEL_PATH", pkg_rb2301_gz)
+    resource_root = PathJoinSubstitution([pkg_rb2301_gz, '..'])
+    env_gz_sim = SetEnvironmentVariable(
+        "GZ_SIM_RESOURCE_PATH",
+        [
+            resource_root,
+            TextSubstitution(text=os.pathsep),
+            EnvironmentVariable("GZ_SIM_RESOURCE_PATH", default_value=""),
+        ],
+    )
+    ld.add_action(env_gz_sim)
+
+    env_gz = SetEnvironmentVariable("GAZEBO_MODEL_PATH", resource_root)
     ld.add_action(env_gz)
     env_lib_gl = SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "0") # 1 for VBox Users, 0 for non-Vbox users
     ld.add_action(env_lib_gl) # FOR VBOX USERS

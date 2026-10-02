@@ -5,8 +5,7 @@ from rclpy.logging import set_logger_level, LoggingSeverity
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 
-import time
-from pathlib import Path
+
 
 np.set_printoptions(
     2, suppress=True
@@ -26,7 +25,7 @@ class ObstacleAvoidanceNode(Node):
         super().__init__("obstacle_avoidance")
         self.declare_parameter("algo", "nhien")
         self.get_logger().info("Starting Obstacle Avoidance")
-
+        self.algo = None
         self.pub_cmd_vel = self.create_publisher(Twist, "cmd_vel", 10)  # Publish to cmd_vel node
         self.sub_scan = self.create_subscription(LaserScan, "scan", self.sub_scan_callback, 2) # The subscriber to the Lidar ranges.
         self.last_scan = None # Copied laser scan message
@@ -34,26 +33,16 @@ class ObstacleAvoidanceNode(Node):
         self.scanner = 0
         self.scanner_dir = -2
         self.timer = self.create_timer(0.05, self.timer_callback)  # Runs at 20Hz. Can be changed.
-        self.current_bound = set(["right",])
         self.last_invalid_algo = None
         self.tempo_blind_left = 0
         self.tempo_blind_right = 0
         #MAX's var
         # Save the latest gap decision as a JPEG. The same file is overwritten
         # so that debugging does not create an unlimited number of images.
-        self.declare_parameter("save_debug_plot", True)
-        self.declare_parameter("debug_plot_path", "gap_decision.jpg")
-        self.save_debug_plot = self.get_parameter("save_debug_plot").value
-        self.debug_plot_path = Path(
-            self.get_parameter("debug_plot_path").value
-        ).expanduser().resolve()
         self.last_debug_plot_time = 0.0
         self.debug_plot_interval = 1.0
         self.debug_clusters = []
         self.debug_candidate_gaps = []
-        self.get_logger().info(
-            f"Gap decision JPEG: {self.debug_plot_path}"
-        )
 
         robot_width = 0.23
         safety_margin = 0.05
@@ -72,6 +61,31 @@ class ObstacleAvoidanceNode(Node):
         self.missing_count = 0
         self.last_command = (0.0, 0.0) 
 
+        #MAX's var
+        self.last_angles = None
+    
+        # Store each gap decision beside the can layout for this environment.
+
+        # Automatically evaluate every run from the first odometry sample.
+
+        self.robot_width = 0.23
+        self.robot_length = 0.23
+        self.safety_margin = 0.05
+        self.required_gap = self.robot_width + 2 * self.safety_margin
+        self.stop_distance = 0.6 # og:0.9
+        self.look_ahead = 0.75
+
+        self.avoiding = False
+        self.clear_count = 0
+        self.gap_heading = None
+
+        self.gap_side = -1   # -1 = start with right, +1 = start with left
+        self.side = 0        # emergency sidestep direction
+
+        self.side_lock_count = 0
+        self.missing_count = 0
+        self.last_command = (0.0, 0.0)
+
     def move_2D(self, x: float = 0.0, y: float = 0.0, turn: float = 0.0):
         """Publishes a twist command to move in 2D space. +ve x is forwards, +ve y is left, and +ve turn is anticlockwise"""
         twist_msg = Twist()
@@ -84,7 +98,14 @@ class ObstacleAvoidanceNode(Node):
 
     def sub_scan_callback(self, msg):
         """Scan subscriber"""
-        self.last_scan = np.array(msg.ranges)[::2] # Slices the 721 scan array to return only 360 scans. Feel free to edit
+        algo = self.get_parameter("algo").value
+        
+        if algo == "nhien":
+            self.last_scan = np.array(msg.ranges)[::2]
+        elif algo == "max":
+            self.last_scan = np.array(msg.ranges)[::4]  
+        else:
+            self.last_scan = np.array(msg.ranges)[::2]
     def nhien(self):
         """Controller loop"""
         if self.last_scan is None:
@@ -100,61 +121,57 @@ class ObstacleAvoidanceNode(Node):
         delta_x = 0
         delta_y = 0
 
-        #Blind timer ends
-        if self.tempo_blind_left > 0:
-            self.tempo_blind_left -= 1
-        else:
-            self.current_bound.discard("left")
-        if self.tempo_blind_right > 0:
-            self.tempo_blind_right -= 1
-        else:
-            self.current_bound.discard("right")
+
 
         self.last_scan = np.clip(self.last_scan, 0, 20) # Clip the scanned values to avoid inf and 0
 
         last_scan_copy = self.last_scan.copy()
-        if not "front" in self.current_bound:
-            self.current_bound.add("back")
             #Split into 2 parts to prevent over detecting edge (>180)
             #left first
-            window_size = 120
-            window_start = 0
-            while window_start <= len(self.last_scan)/2 - window_size:
-                window_end = window_start + window_size
-                if np.all(self.last_scan[window_start:window_end] == 20):
-                    while window_end < len(self.last_scan)/2 and self.last_scan[window_end] == 20:
-                        window_end += 1
-                    angle_degrees = window_end - window_start
-                    self.last_scan[window_start:window_end] = boundary_distance(
-                        angle_degrees)
-                    window_start = window_end
-                    #print("Zeroed left")
-                    continue
-                window_start += 1
-            
-            #Right
-            while window_start <= len(self.last_scan) - window_size:
-                window_end = window_start + window_size
-                if np.all(self.last_scan[window_start:window_end] == 20):
-                    while window_end < len(self.last_scan) and self.last_scan[window_end] == 20:
-                        window_end += 1
-                    angle_degrees = window_end - window_start
-                    self.last_scan[window_start:window_end] = boundary_distance(
-                        angle_degrees)
-                    window_start = window_end
-                    #print("Zeroed right")
-                    continue
-                window_start += 1
+        window_size = 90
+        window_start = 0
+        while window_start <= len(self.last_scan)/2 - window_size:
+            window_end = window_start + window_size
+            if np.all(self.last_scan[window_start:window_end] == 20):
+                while window_end < len(self.last_scan)/2 and self.last_scan[window_end] == 20:
+                    window_end += 1
+                angle_degrees = window_end - window_start
+                self.last_scan[window_start:window_end] = boundary_distance(
+                    angle_degrees)
+                window_start = window_end
+                #print("Zeroed left")
+                continue
+            window_start += 1
+        
+        #Right
+        while window_start <= len(self.last_scan) - window_size:
+            window_end = window_start + window_size
+            if np.all(self.last_scan[window_start:window_end] == 20):
+                while window_end < len(self.last_scan) and self.last_scan[window_end] == 20:
+                    window_end += 1
+                angle_degrees = window_end - window_start
+                self.last_scan[window_start:window_end] = boundary_distance(
+                    angle_degrees)
+                window_start = window_end
+                #print("Zeroed right")
+                continue
+            window_start += 1
         #Second Layer
-        if "left" in self.current_bound:
+        #Mask the back
+        self.last_scan[100:260:5] = 0.1 
+
+        #Blind left/ right side
+        if self.tempo_blind_left > 0:
+            self.tempo_blind_left -= 1
             self.last_scan[0:180:5] = 0.1
-        if "right" in self.current_bound:
-            self.last_scan[-180:0:5]  = 0.1
-        if "back" in self.current_bound:
-            self.last_scan[100:260:5] = 0.1
-        if "front" in self.current_bound:
-            self.last_scan[-30::5] = 0.1
-            self.last_scan[:30:5] = 0.1      
+            self.tempo_blind_right = 0
+            print("Blind left")
+        
+        if self.tempo_blind_right > 0:
+            self.tempo_blind_right -= 1
+            self.last_scan[-180::5]  = 0.1 
+            self.tempo_blind_right = 0
+            print("Blind right")
         
         self.last_scan = np.clip(np.concatenate((self.last_scan, self.last_scan)), 0, 20)
         window_size = 20
@@ -173,7 +190,7 @@ class ObstacleAvoidanceNode(Node):
                 self.last_scan[window_start:window_end] = mean_distance 
                 if gap_width >= 20:
                     if mean_distance >= 2:
-                        gap_score = gap_width
+                        gap_score = (gap_width + mean_distance) / 2
                         if gap_score > best_gap_score:
                             best_gap_score = gap_score
                             best_gap_center = window_start + (window_end - window_start) / 2
@@ -199,54 +216,51 @@ class ObstacleAvoidanceNode(Node):
         #Emergency
 
         coke_near_right = np.any(last_scan_copy[-180:-60]<0.2) and False
-        bound_near_right = np.all(last_scan_copy[-190:] >= 20) and np.all(last_scan_copy[:10] >= 20)
+        bound_near_right = np.all(last_scan_copy[-200:] >= 20) and np.all(last_scan_copy[:20] >= 20)
         coke_near_left = np.any(last_scan_copy[60:180]<0.2) and False
-        bound_near_left = np.all(last_scan_copy[190:] >= 20) and np.all(last_scan_copy[10:] >= 20)
+        bound_near_left = np.all(last_scan_copy[:200] >= 20) and np.all(last_scan_copy[20:] >= 20)
 
         coke_near_front = (np.any(last_scan_copy[-30:] < 0.2) or np.any(last_scan_copy[:30] < 0.2)) and False
 
         min_dis_right = np.min(last_scan_copy[-180:-60]) if not coke_near_right else 0.2
         min_dis_left = np.min(last_scan_copy[60:180]) if not  coke_near_left else 0.2
 
-        if (bound_near_right) and (bound_near_left):
-            if min_dis_right - min_dis_left < -0.1:
-                self.current_bound.add("right")
-                self.tempo_blind_right += 20
-            elif min_dis_right - min_dis_left > 0.1:
-                self.current_bound.add("left")
-                self.tempo_blind_right += 20
-        #if sth on right
-        elif bound_near_right:
-            self.current_bound.add("right")
-            self.tempo_blind_right += 20
+        # #if sth on right
+        # if bound_near_right:
+        #     self.current_bound.add("right")
+        #     self.tempo_blind_right += 20
             
-        #if sth on left
-        elif bound_near_left:
-            self.current_bound.add("left")
-            self.tempo_blind_left += 20
-            
-        if "front" in self.current_bound:
-            self.current_bound.remove("front")
-            self.current_bound.add("back")
-
-        print("Boundaries:",self.current_bound)
+        # #if sth on left
+        # elif bound_near_left:
+        #     self.current_bound.add("left")
+        #     self.tempo_blind_left += 20
 
         #go left
-        
-        if np.any(last_scan_copy[-180:]<0.2):
+        if np.any(last_scan_copy[90:181]<0.25):
+            self.tempo_blind_left += 10
+            self.tempo_blind_right = 0
+            print("LEFTDOWN")
+        elif np.any(last_scan_copy[181:271]<0.25):
+            self.tempo_blind_right += 10
+            self.tempo_blind_left = 0
+            print("RIGHTDOWN")
+
+        if (np.any(last_scan_copy[-180:]<0.25) and self.tempo_blind_left == 0):
             print("Emergency left")
+            self.tempo_blind_right += 10
             delta_x = delta_x
             delta_y = (delta_y if delta_y > 0 else 0.2)
-            self.current_bound.add("right")
-            self.tempo_blind_right += 20
         #Go right
-        if np.any(last_scan_copy[:180]<0.2):
+        elif (np.any(last_scan_copy[:180]<0.25) and self.tempo_blind_right == 0):
             print("Emergency right")
+            self.tempo_blind_left += 10
             delta_x = delta_x
             delta_y = (delta_y if delta_y < 0 else -0.2)
-            self.tempo_blind_left += 20
+
+        
+    
         #GO BACK
-        if np.any(last_scan_copy[-90:] < 0.1) or np.any(last_scan_copy[:90] < 0.1):
+        if np.any(last_scan_copy[-90:] < 0.15) or np.any(last_scan_copy[:90] < 0.15):
             print("Emergency BACK")
             delta_x = (delta_x if delta_x < 0 else 0)
             delta_y = delta_y
@@ -254,7 +268,17 @@ class ObstacleAvoidanceNode(Node):
         self.move_2D(delta_x,delta_y)
         self.last_scan = None
 
+    #MAXX
+    """
+    LiDAR index 0       approximately -180  robot front
+    LiDAR index 45      approximately  -90  robot left
+    LiDAR index 90                      0   robot back
+    LiDAR index 135     approximately  +90  robot right
+    LiDAR index 179     approximately +178  robot front
+    
+    """
     def max(self):
+
         if self.last_scan is None:
             return
 
@@ -301,7 +325,6 @@ class ObstacleAvoidanceNode(Node):
             target = self.choose_gap(targets)
 
             if target is not None:
-                self.save_gap_decision_plot(points, target)
 
                 # Move towards the middle of the selected gap.
                 direction = target / np.linalg.norm(target)
@@ -320,11 +343,10 @@ class ObstacleAvoidanceNode(Node):
 
             self.last_command = (vx, vy)
 
-       
+        
         print(f"Moving to x={vx}, y={vy}")
         self.move_2D(x=vx, y=vy, turn=0.0)
 
-    #Max'es functions
     def get_front_scan(self, scan):
         # Keep the original scan order: right side -> front -> left side.
         quarter = len(scan) // 4
@@ -340,6 +362,16 @@ class ObstacleAvoidanceNode(Node):
         y = front[valid] * np.sin(angles[valid])
         points = np.column_stack((x, y))
         return points, indices, angles, ranges
+    
+    def required_clearance_for_direction(self, direction):
+        """Project the fixed-heading chassis across a travel direction."""
+        return (
+            self.robot_width * abs(direction[0])
+            + self.robot_length * abs(direction[1])
+            + 2.0 * self.safety_margin
+        )
+
+
 
     def find_gap_targets(self, points, indices):
         # Put neighbouring readings from the same can into one group.
@@ -377,18 +409,24 @@ class ObstacleAvoidanceNode(Node):
                 continue
 
             direction = midpoint / distance
-            # Measure the gap across the direction we want to travel.
-            width = abs(direction[0] * gap[1] - direction[1] * gap[0])
-            if width < self.required_gap:
+            # The robot keeps its +x heading, so the opening it can pass through
+            # is the lateral (+/-y) surface-to-surface separation. The diagonal
+            # vector to the midpoint is not the robot heading.
+            lateral_width = abs(gap[1])
+            if lateral_width < self.required_gap:
                 continue
 
-            # Check that another can is not in the way of this gap.
+            # Separately check the swept corridor along the diagonal translation.
+            corridor_required = self.required_clearance_for_direction(direction)
             along = points @ direction
-            across = np.abs(direction[0] * points[:, 1] - direction[1] * points[:, 0])
+            across = np.abs(
+                direction[0] * points[:, 1]
+                - direction[1] * points[:, 0]
+            )
             blocked = np.any(
                 (along > 0.05)
                 & (along < distance - 0.05)
-                & (across < self.required_gap / 2)
+                & (across < corridor_required / 2)
             )
             if not blocked:
                 heading = abs(np.arctan2(midpoint[1], midpoint[0]))
@@ -398,144 +436,6 @@ class ObstacleAvoidanceNode(Node):
                 )
 
         return targets
-
-    def save_gap_decision_plot(self, points, chosen_target):
-        '''Save the latest gap-selection decision as a JPEG image.'''
-        if not self.save_debug_plot:
-            return
-
-        now = time.monotonic()
-        if now - self.last_debug_plot_time < self.debug_plot_interval:
-            return
-        self.last_debug_plot_time = now
-
-        try:
-            # The Agg backend writes image files without opening a GUI window.
-            import matplotlib
-            matplotlib.use("Agg", force=True)
-            import matplotlib.pyplot as plt
-
-            fig, ax = plt.subplots(figsize=(8, 8))
-
-            # Grey dots are every valid LiDAR return used by the controller.
-            if len(points) > 0:
-                ax.scatter(
-                    points[:, 0],
-                    points[:, 1],
-                    s=16,
-                    color="0.65",
-                    alpha=0.55,
-                    label="LiDAR points",
-                    zorder=1,
-                )
-
-            # Larger coloured dots show the clusters made from those returns.
-            colours = plt.get_cmap("tab10")
-            for cluster_id, cluster in enumerate(self.debug_clusters):
-                if len(cluster) == 0:
-                    continue
-                ax.scatter(
-                    cluster[:, 0],
-                    cluster[:, 1],
-                    s=38,
-                    color=colours(cluster_id % 10),
-                    edgecolors="black",
-                    linewidths=0.3,
-                    label="Clustered points" if cluster_id == 0 else None,
-                    zorder=2,
-                )
-
-            chosen_gap = None
-            for gap_id, (right_edge, left_edge, midpoint) in enumerate(
-                self.debug_candidate_gaps
-            ):
-                # Orange dashed lines are all gaps accepted by the checks.
-                ax.plot(
-                    [right_edge[0], left_edge[0]],
-                    [right_edge[1], left_edge[1]],
-                    "--",
-                    color="orange",
-                    linewidth=1.5,
-                    label="Candidate gaps" if gap_id == 0 else None,
-                    zorder=3,
-                )
-                ax.scatter(
-                    midpoint[0],
-                    midpoint[1],
-                    marker="x",
-                    s=50,
-                    color="orange",
-                    zorder=4,
-                )
-                if np.allclose(midpoint, chosen_target):
-                    chosen_gap = (right_edge, left_edge)
-
-            # The thick green segment joins the two edges of the chosen gap.
-            if chosen_gap is not None:
-                right_edge, left_edge = chosen_gap
-                ax.plot(
-                    [right_edge[0], left_edge[0]],
-                    [right_edge[1], left_edge[1]],
-                    color="limegreen",
-                    linewidth=4.0,
-                    label="Chosen gap",
-                    zorder=5,
-                )
-
-            ax.scatter(
-                chosen_target[0],
-                chosen_target[1],
-                marker="*",
-                s=180,
-                color="limegreen",
-                edgecolors="black",
-                label="Chosen midpoint",
-                zorder=6,
-            )
-            ax.arrow(
-                0.0,
-                0.0,
-                chosen_target[0],
-                chosen_target[1],
-                width=0.008,
-                head_width=0.07,
-                length_includes_head=True,
-                color="green",
-                alpha=0.75,
-                zorder=4,
-            )
-            ax.scatter(
-                0.0,
-                0.0,
-                marker="^",
-                s=100,
-                color="royalblue",
-                label="Robot",
-                zorder=7,
-            )
-
-            ax.set_title("Obstacle avoidance gap decision")
-            ax.set_xlabel("x (m, forward)")
-            ax.set_ylabel("y (m, left)")
-            ax.set_xlim(-0.05, self.look_ahead + 0.05)
-            ax.set_ylim(-self.look_ahead - 0.05, self.look_ahead + 0.05)
-            ax.set_aspect("equal", adjustable="box")
-            ax.grid(True, alpha=0.3)
-            ax.legend(loc="upper right")
-
-            self.debug_plot_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.tight_layout()
-            fig.savefig(self.debug_plot_path, format="jpeg", dpi=150)
-            plt.close(fig)
-            self.get_logger().debug(
-                f"Saved gap decision plot to {self.debug_plot_path}"
-            )
-        except Exception as error:
-            # Plotting is diagnostic only and must never stop the controller.
-            self.get_logger().warning(
-                f"Could not save gap decision plot: {error}"
-            )
-
     def choose_gap(self, targets):
         if not targets:
             return None
@@ -639,13 +539,16 @@ class ObstacleAvoidanceNode(Node):
 
         vy = 0.25 * self.side
         return vx, vy
+    ##MAXX
     def timer_callback(self):
         algo = self.get_parameter("algo").value
 
         if algo == "nhien":
+            self.algo = "nhien"
             self.last_invalid_algo = None
             self.nhien()
         elif algo == "max":
+            self.algo = "max"
             self.last_invalid_algo = None
             self.max()
         else:
