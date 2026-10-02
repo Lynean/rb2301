@@ -55,9 +55,17 @@ def generate_launch_description():
     )
     ld.add_action(scenario_arg)
 
+    random_seed_arg = DeclareLaunchArgument(
+        'random_seed',
+        default_value='0',
+        description='Seed used to generate the random obstacle maze',
+    )
+    ld.add_action(random_seed_arg)
+
     def generate_obstacle_world(context):
         obstacle_generator.generate_sdf_file(
-            LaunchConfiguration('scenario').perform(context)
+            LaunchConfiguration('scenario').perform(context),
+            random_seed=int(LaunchConfiguration('random_seed').perform(context)),
         )
         return []
 
@@ -125,9 +133,9 @@ def generate_launch_description():
         package="ros_gz_bridge",
         executable="parameter_bridge",
         arguments=[
-            "/clock@rosgraph_msgs/msg/Clockgz.msgs.Clock",
+            "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             "/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist",
-            "/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry",
+            "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
             "/joint_states@sensor_msgs/msg/JointState@gz.msgs.Model",
             "/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V",
             "/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan",

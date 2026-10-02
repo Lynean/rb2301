@@ -1,0 +1,86 @@
+"""Launch the seeded CA1 simulation, controller, and grading node."""
+
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    UnsetEnvironmentVariable,
+)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    algo = LaunchConfiguration("algo")
+    scenario = LaunchConfiguration("scenario")
+    random_seed = LaunchConfiguration("random_seed")
+
+    algo_argument = DeclareLaunchArgument(
+        "algo",
+        description="Obstacle-avoidance algorithm to evaluate: nhien or max",
+        choices=["nhien", "max"],
+    )
+    scenario_argument = DeclareLaunchArgument(
+        "scenario",
+        default_value="random",
+        description="Obstacle layout to evaluate",
+        choices=["random", "front_left", "front_right", "diagonal_left"],
+    )
+    random_seed_argument = DeclareLaunchArgument(
+        "random_seed",
+        description=(
+            "Integer maze seed; reuse this value when comparing algorithms"
+        ),
+    )
+
+    gazebo = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [
+                    FindPackageShare("rb2301_gz"),
+                    "launch",
+                    "ca1_gazebo.launch.py",
+                ]
+            )
+        ),
+        launch_arguments={
+            "scenario": scenario,
+            "random_seed": random_seed,
+        }.items(),
+    )
+
+    obstacle_avoidance = Node(
+        package="rb2301_ca1",
+        executable="obstacle_avoidance",
+        name="obstacle_avoidance",
+        output="screen",
+        parameters=[
+            {
+                "algo": algo,
+                "use_sim_time": True,
+            }
+        ],
+    )
+
+    algo_grader = Node(
+        package="rb2301_ca1",
+        executable="algo_grader",
+        name="algo_grader",
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+    )
+
+    return LaunchDescription(
+        [
+            algo_argument,
+            random_seed_argument,
+            UnsetEnvironmentVariable("SNAP"),
+            UnsetEnvironmentVariable("GTK_PATH"),
+            obstacle_avoidance,
+            algo_grader,
+            gazebo,
+        ]
+    )
+

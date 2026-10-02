@@ -11,13 +11,14 @@ workspace_directory = os.path.dirname(os.path.realpath(__file__))[:-22]
 overwrite_file =  workspace_directory + '/rb2301_gz/worlds/obstacle_world_ca1.sdf'
 obstacle_model = f'file:///{workspace_directory}/rb2301_gz/meshes/coke/6'
 
-def generate_maze():
+def generate_maze(random_seed=None):
+    rng = np.random.default_rng(random_seed)
     maze_arr = np.zeros((height, width))
     maze_arr[2, int(width/2)] = 1
     for x in range(2, height-2):
         for y in range(1, width-1):
             chance = np.sum(maze_arr[x-1:x+2, y-1:y+2])
-            roll = np.random.random()
+            roll = rng.random()
             if roll < 0.5 - 0.4*2**chance + x/(3*height): # Tweak the chance of cans spawning here
                 maze_arr[x,y] = 1
 
@@ -80,17 +81,20 @@ def add_coke_element(x, y, n):
     obstacle.append(pose)
     return obstacle
 
-def generate_sdf_file(scenario='random'):
+def generate_sdf_file(scenario='random', random_seed=None):
     if not randomise and scenario == 'random':
         return
 
     if scenario == 'random':
-        maze_arr = generate_maze()
+        maze_arr = generate_maze(random_seed=random_seed)
     else:
         maze_arr = generate_edge_case(scenario)
 
     n = 1
-    print(f"Generating {scenario} obstacle world...")
+    seed_message = (
+        f" with random seed {random_seed}" if scenario == 'random' else ""
+    )
+    print(f"Generating {scenario} obstacle world{seed_message}...")
     tree = ET.parse(overwrite_file)
     root = tree.getroot()
     world = root[0]
