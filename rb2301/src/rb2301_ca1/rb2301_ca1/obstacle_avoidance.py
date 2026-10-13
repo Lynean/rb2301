@@ -44,22 +44,8 @@ class ObstacleAvoidanceNode(Node):
         self.debug_clusters = []
         self.debug_candidate_gaps = []
 
-        robot_width = 0.23
-        safety_margin = 0.05
-        self.required_gap = robot_width + 2 * safety_margin
-        self.stop_distance = 0.6 # og:0.9
-        self.look_ahead = 0.75
-
-        self.avoiding = False
-        self.clear_count = 0
-        self.gap_heading = None
-
         self.gap_side = -1   # -1 = start with right, +1 = start with left
         self.side = 0        # emergency sidestep direction
-
-        self.side_lock_count = 0
-        self.missing_count = 0
-        self.last_command = (0.0, 0.0) 
 
         #MAX's var
         self.last_angles = None
@@ -72,15 +58,12 @@ class ObstacleAvoidanceNode(Node):
         self.robot_length = 0.23
         self.safety_margin = 0.05
         self.required_gap = self.robot_width + 2 * self.safety_margin
-        self.stop_distance = 0.6 # og:0.9
+        self.stop_distance = 0.3 # og:0.9
         self.look_ahead = 0.75
 
         self.avoiding = False
         self.clear_count = 0
         self.gap_heading = None
-
-        self.gap_side = -1   # -1 = start with right, +1 = start with left
-        self.side = 0        # emergency sidestep direction
 
         self.side_lock_count = 0
         self.missing_count = 0
@@ -172,6 +155,11 @@ class ObstacleAvoidanceNode(Node):
             self.last_scan[-180::5]  = 0.1 
             self.tempo_blind_right = 0
             print("Blind right")
+
+        if self.tempo_blind_left > 20:
+            self.tempo_blind_left = 0
+        if self.tempo_blind_right > 20:
+            self.tempo_blind_right = 0
         
         self.last_scan = np.clip(np.concatenate((self.last_scan, self.last_scan)), 0, 20)
         window_size = 20
@@ -225,35 +213,24 @@ class ObstacleAvoidanceNode(Node):
         min_dis_right = np.min(last_scan_copy[-180:-60]) if not coke_near_right else 0.2
         min_dis_left = np.min(last_scan_copy[60:180]) if not  coke_near_left else 0.2
 
-        # #if sth on right
-        # if bound_near_right:
-        #     self.current_bound.add("right")
-        #     self.tempo_blind_right += 20
-            
-        # #if sth on left
-        # elif bound_near_left:
-        #     self.current_bound.add("left")
-        #     self.tempo_blind_left += 20
-
         #go left
-        if np.any(last_scan_copy[90:181]<0.25):
-            self.tempo_blind_left += 10
+        if np.any(last_scan_copy[90:181]<0.15):
+            self.tempo_blind_left += 5
             self.tempo_blind_right = 0
             print("LEFTDOWN")
-        elif np.any(last_scan_copy[181:271]<0.25):
-            self.tempo_blind_right += 10
+        elif np.any(last_scan_copy[181:271]<0.15):
+            self.tempo_blind_right += 5
             self.tempo_blind_left = 0
             print("RIGHTDOWN")
 
-        if (np.any(last_scan_copy[-180:]<0.25) and self.tempo_blind_left == 0):
+        if (np.any(last_scan_copy[-180:]<0.15) and self.tempo_blind_left == 0):
             print("Emergency left")
-            self.tempo_blind_right += 10
+            self.tempo_blind_right += 1
             delta_x = delta_x
             delta_y = (delta_y if delta_y > 0 else 0.2)
-        #Go right
-        elif (np.any(last_scan_copy[:180]<0.25) and self.tempo_blind_right == 0):
+        elif (np.any(last_scan_copy[:180]<0.15) and self.tempo_blind_right == 0):
             print("Emergency right")
-            self.tempo_blind_left += 10
+            self.tempo_blind_left += 1
             delta_x = delta_x
             delta_y = (delta_y if delta_y < 0 else -0.2)
 
