@@ -1,5 +1,7 @@
 # RB2301 CA1 - Reactive Obstacle Avoidance
 
+This README is AI-Generated
+
 This ROS 2 package controls an omnidirectional nano-car through an unknown field of cylindrical obstacles. The robot has no pre-built map: it repeatedly reads a 360-degree LiDAR scan, chooses a safe movement direction, and publishes a velocity command.
 
 The package contains **two independent obstacle-avoidance algorithms** in [`obstacle_avoidance.py`](rb2301_ca1/obstacle_avoidance.py):
