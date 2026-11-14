@@ -299,35 +299,52 @@ if wanted("heading_layers"):
     segs = pt.arena(5.0, 5.0) + [((0.5, -0.2), (0.5, -1.6)), ((0.5, -0.2), (1.4, -0.2))]
     scn = {"segments": segs}
     x, y, hd = 0.0, 0.0, 70.0
+    h = math.radians(hd)
     msg = scan_at(scn, x, y, hd)
+    pts, rng = oc.scan_to_robot_points(msg)
+    corridor = oc.analyse_front_corridor(pts, rng)
+    assert corridor["nearest"] >= oc.HEADING_HOLD_CLEARANCE, "scene must have a clear corridor (Case 2)"
     target, label = oc.choose_goal_heading(msg, hd, oc.TARGET_HEADING_DEG, oc.NORTH_DEG, {})
-    fig, ax = base_axes(scn, "Corridor clear: three heading layers (here layer 3, a detour)", (-1.6, 1.8, -1.9, 1.5),
-                        size=(6.8, 6.8))
+    fig, ax = base_axes(scn, "Corridor clear (Case 2): which heading to hold? Here layer 3, a detour",
+                        (-1.4, 1.9, -1.8, 2.3), size=(6.6, 7.6))
     world = np.arange(-180.0, 180.0, oc.HEADING_CANDIDATE_STEP_DEG)
     depths = oc._cone_depths(msg, [oc.wrap_deg(w - hd) for w in world])
-    lx, ly = x + oc.LASER_X_OFFSET * math.cos(math.radians(hd)), y + oc.LASER_X_OFFSET * math.sin(math.radians(hd))
     for w, dep in zip(world, depths):
         # One cone per candidate direction (+-HEADING_CONE_HALF_DEG, median range); drawn up to 1.3 m
         col = "tab:green" if dep >= oc.HEADING_OPEN_DEPTH else "tab:red"
-        ax.add_patch(Polygon(pt.cone_polygon(x, y, math.radians(hd), +1, min(dep, 1.3), oc.wrap_deg(w - hd), oc.HEADING_CONE_HALF_DEG),
-                             closed=True, fc=col, ec="white", lw=0.8, alpha=0.45, zorder=2))
+        ax.add_patch(Polygon(pt.cone_polygon(x, y, h, +1, min(dep, 1.3), oc.wrap_deg(w - hd), oc.HEADING_CONE_HALF_DEG),
+                             closed=True, fc=col, ec="white", lw=0.8, alpha=0.35, zorder=2))
+    # The north-east cone: outlined, with its depth
+    ne = int(np.argmin(np.abs([oc.wrap_deg(w - oc.TARGET_HEADING_DEG) for w in world])))
+    ne_poly = pt.cone_polygon(x, y, h, +1, min(depths[ne], 1.3), oc.wrap_deg(world[ne] - hd), oc.HEADING_CONE_HALF_DEG)
+    ax.add_patch(Polygon(ne_poly, closed=True, fill=False, ec="darkred", lw=2.5, zorder=4))
+    tip = ne_poly[len(ne_poly) // 2 + 1]
+    ax.annotate(f"north-east cone:\nblocked, {depths[ne]:.2f} m deep", xy=tip, xytext=(tip[0] + 0.25, tip[1] - 0.55),
+                fontsize=9, color="darkred", arrowprops=dict(arrowstyle="->", color="darkred"), zorder=6)
+    # The 110 deg on-course window around north-east: just an arc, not an area
     t = math.radians(oc.TARGET_HEADING_DEG)
     half = math.radians(oc.HEADING_ON_COURSE_DEG / 2)
-    ax.add_patch(Polygon([(x, y)] + [(x + 1.5 * math.cos(a_), y + 1.5 * math.sin(a_)) for a_ in np.linspace(t - half, t + half, 20)],
-                         closed=True, fc="gold", alpha=0.15, ec="goldenrod", ls="--", zorder=1))
-    ax.annotate("", xy=(x + 1.45 * math.cos(t), y + 1.45 * math.sin(t)), xytext=(x, y),
-                arrowprops=dict(arrowstyle="->", color="goldenrod", lw=2))
-    ax.text(x + 1.1 * math.cos(t) + 0.05, y + 1.1 * math.sin(t) - 0.15, "north-east\n(blocked)", color="darkgoldenrod", fontsize=9)
+    arc = np.linspace(t - half, t + half, 30)
+    ax.plot(x + 0.5 * np.cos(arc), y + 0.5 * np.sin(arc), color="goldenrod", lw=2.5, zorder=4)
+    ax.text(x + 0.05, y - 0.62, "110° on-course window", color="darkgoldenrod", fontsize=8.5, ha="center", zorder=6)
+    # The front corridor, along the robot's heading: clear, so Case 2 applies
+    draw_robot(ax, x, y, h, corridor=True)
+    cend = pt.corridor_polygon(x, y, h)[1]
+    ax.text(cend[0] + 0.05, cend[1] - 0.05, "front corridor:\nclear", fontsize=9, color="darkorange", va="top", zorder=6)
     ta = math.radians(target)
     ax.annotate("", xy=(x + 1.3 * math.cos(ta), y + 1.3 * math.sin(ta)), xytext=(x, y),
-                arrowprops=dict(arrowstyle="-|>", color="k", lw=2.5))
-    draw_robot(ax, x, y, math.radians(hd), corridor=False)
-    caption(ax, f"heading {hd:+.0f} deg: outside the 110 deg window (layer 1: no)\n"
-                f"north-east cone < {oc.HEADING_OPEN_DEPTH:.1f} m deep (layer 2: no)\n"
-                f"layer 3 -> {label}\n"
-                f"cones every {oc.HEADING_CANDIDATE_STEP_DEG:.0f} deg (+-{oc.HEADING_CONE_HALF_DEG} deg, median range)\n"
-                f"green = open (>= {oc.HEADING_OPEN_DEPTH:.1f} m), red = blocked")
-    ax.text(1.0, 1.35, "north ->", fontsize=9)
+                arrowprops=dict(arrowstyle="-|>", color="k", lw=2.5), zorder=7)
+    ax.text(x + 1.32 * math.cos(ta), y + 1.32 * math.sin(ta) + 0.08, "chosen", fontsize=9, zorder=7)
+    near_text = "none in it" if math.isinf(corridor["nearest"]) else f"{corridor['nearest']:.2f} m"
+    ax.text(0.98, 0.02, "north = +x, east = -y", transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5, color="dimgray")
+    ax.text(0.02, 0.02,
+            f"front corridor clear (nearest: {near_text}) -> Case 2\n"
+            f"1. heading {hd:+.0f} deg is outside the window -> no\n"
+            f"2. north-east cone < {oc.HEADING_OPEN_DEPTH:.1f} m -> no\n"
+            f"3. detour: open cone closest to N or E -> {label}\n"
+            f"cones: every {oc.HEADING_CANDIDATE_STEP_DEG:.0f} deg, +-{oc.HEADING_CONE_HALF_DEG} deg, median range\n"
+            f"green = open (>= {oc.HEADING_OPEN_DEPTH:.1f} m), red = blocked",
+            transform=ax.transAxes, va="bottom", family="monospace", fontsize=8.5, bbox=dict(fc="white", alpha=0.9), zorder=10)
     save_png(fig, "heading_layers")
 
 # ---------------------------------------------------------------- 8. gate detection: the closed-line check

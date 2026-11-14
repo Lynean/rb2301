@@ -98,3 +98,5 @@ python3 pocket_test.py random --seed 0 --trials 20 --headless   # success rate o
 **Animation controls.** A slider and Play/Pause, Rewind, Stop, step and speed buttons. Keys: `space` play/pause, `←`/`→` step, `r` rewind, `s` stop. Close the window to move on to the next scenario.
 
 **Result line.** Each run prints `FINISHED in Ns`, `COLLISION`, `STUCK` or `ok`, with the distance travelled and the first turn.
+
+**Batch of recorded runs.** `python3 sim_runs/make_sim_runs.py` (from `src/rb2301_fp`) runs 20 random courses with hand-swung boards, skipping courses where the robot spawns on an obstacle. It saves each run as a GIF named with its result (`COMPLETE`, `TIMEOUT` or `COLLISION`), plus a summary table, in [`rb2301/src/rb2301_fp/sim_runs/`](rb2301/src/rb2301_fp/sim_runs/README.md).

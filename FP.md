@@ -42,6 +42,7 @@ These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py`
 | pocket_test (2-D, no ROS) | From `src/rb2301_fp`: `python3 pocket_test.py` runs every scenario. Name one to run only it (`pocket`, `zigzag`, ...). `random --seed N` runs a randomised course; `--swing` makes the boards hand-swung (decaying); `--real` uses the real robot's speed caps and 720 beams; `--headless --trials 20` gives a success rate. |
 | Real robot | On the laptop: `./rsync_fp.sh <robot number>` copies the package to `~/Downloads/rb2301_fp_13` on the robot. On the robot: build with `colb`, start `basecontrol`, `vrpn` and `rplidar`, then `./fp.sh`. |
 | Pose check | `./fp.sh --calibrate` prints the OptiTrack and maze poses and never drives. |
+| Recorded runs | `python3 sim_runs/make_sim_runs.py` from `src/rb2301_fp`: 20 random courses saved as GIFs marked COMPLETE / TIMEOUT, with a summary in [sim_runs/README.md](rb2301/src/rb2301_fp/sim_runs/README.md) (latest: 15 complete, 5 timeouts, 0 collisions). |
 | LiDAR blind zone | `./blindzone_check.sh`: an interactive tool that measures the closest distance the LiDAR can still see. |
 
 ## Overview
@@ -232,7 +233,7 @@ With nothing within 0.8 m and no lock, the robot steers toward a goal heading ch
 
 ![Heading layers](media/fp/features/heading_layers.png)
 
-*Facing +70° (outside the gold 110° window) with north-east blocked, so layers 1 and 2 fail. Each candidate direction is a narrow cone measured by its median range, one every 15°. Of the open cones (green), the one closest to North or East is chosen (black arrow).*
+*The front corridor (orange, along the robot's heading) is clear, so the robot is in Case 2 and picks a heading to hold. Each candidate direction is a narrow cone measured by its median range, one every 15° (green = open, red = blocked). Layer 1 fails because the heading (+70°) is outside the 110° window around north-east (gold arc); layer 2 fails because the north-east cone (dark red outline) is blocked by the wall. Layer 3 picks the open cone closest to North or East: due north (black arrow).*
 
 
 **Why three layers.** Steering straight to north-east all the time turned the robot into walls in narrow places. Layer 1 lets it keep driving along a corridor that already goes roughly the right way. Layer 3 gets it out when north-east is blocked by a wall, instead of pushing into it.
