@@ -333,11 +333,11 @@ In WAIT, the robot crosses when the board is not in its path (body half-width + 
 
 It waits if the board is moving toward the shorter end, because it will come back soon.
 
-**False gate.** If the first SCAN sees nothing moving, the gate was a false one. The "gate passed" flag is cleared and normal driving resumes, while gate detection keeps looking for the real gate. The false gap stays in the passed list, so it is not taken again.
-
 ![Board crossing clip](media/fp/features/boards.gif)
 
 *Seed 16 with full-swing boards, so a board really sweeps across the robot's path. SCAN finds one board's path (magenta dashed), SIDE drives to the east wall, FACE turns north, then APPROACH and WAIT: the robot holds while the board is in front, and crosses as soon as it is moving away toward the longer end of its swing. Then a fresh SCAN for the second board.*
+
+**False gate.** If the first SCAN sees nothing moving, the gate was a false one. The "gate passed" flag is cleared and normal driving resumes, while gate detection keeps looking for the real gate. The false gap stays in the passed list, so it is not taken again.
 
 
 ## Iterative optimisation
