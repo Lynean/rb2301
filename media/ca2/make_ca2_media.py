@@ -24,17 +24,18 @@ cfg = pp.sim_config
 grid = np.load(os.path.join(PKG, cfg["map_file"]), allow_pickle=True)
 origin, res, goals = cfg["origin"], cfg["resolution"], cfg["goal_list"]
 start = (0.0, 0.0)
+UP = 4  # map_upsample_factor in WaypointNode.__init__
 
 
 def preprocessed():
-    fake = types.SimpleNamespace(map_array=grid, map_upsample_factor=3)
+    fake = types.SimpleNamespace(map_array=grid, map_upsample_factor=UP)
     return pp.WaypointNode.preprocess_map(fake)
 
 
 def build_tree(fine, n_nodes=2000, seed=0):
     '''The same RRT* loop as WaypointNode.timer_callback (seeded so the figure is repeatable).'''
     np.random.seed(seed)
-    fres = res / 3
+    fres = res / UP
     tree = pp.Tree()
     tree.add_node(pp.TreeNode(pos=start, cost=0, parent_id=-1, id=0, fixed_cost=0))
     while len(tree.nodes) < n_nodes:
@@ -62,7 +63,7 @@ def routes(tree):
 
 def show_map(ax, fine, title):
     # 0 free, 75 soft ring, 99 hard (original wall or hard ring)
-    original = np.repeat(np.repeat(grid, 3, axis=0), 3, axis=1) == 99
+    original = np.repeat(np.repeat(grid, UP, axis=0), UP, axis=1) == 99
     layer = np.where(original, 3, np.where(fine == 99, 2, np.where(fine == 75, 1, 0)))
     cmap = ListedColormap(["white", "#fde3b0", "#e8902c", "#5a3a1a"])
     x1, y1 = origin[0] + grid.shape[0] * res, origin[1] + grid.shape[1] * res
@@ -83,7 +84,7 @@ def figure_planner():
     fig, axs = plt.subplots(1, 2, figsize=(12, 8.8), dpi=DPI)
     fig.subplots_adjust(left=0.05, right=0.99, top=0.9, bottom=0.14, wspace=0.1)
 
-    show_map(axs[0], fine, "1. Map preprocessing: 3x finer grid + two obstacle rings")
+    show_map(axs[0], fine, f"1. Map preprocessing: {UP}x finer grid + two obstacle rings")
     from matplotlib.patches import Patch
     axs[0].legend(handles=[Patch(fc="#5a3a1a", label="wall (original map)"), Patch(fc="#e8902c", label="hard ring: wall (99)"),
                            Patch(fc="#fde3b0", ec="#e0c080", label="soft ring: allowed, costs +75"), Patch(fc="white", ec="gray", label="free")],

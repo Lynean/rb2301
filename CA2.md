@@ -12,7 +12,7 @@ The robot has to drive through a known maze and reach a list of goal points in o
 
 ```mermaid
 flowchart LR
-    A[Occupancy grid] --> B[Upsample x3<br/>+ obstacle bubbles]
+    A[Occupancy grid] --> B[Upsample x4<br/>+ obstacle bubbles]
     B --> C[RRT* tree<br/>2000 nodes, built once]
     C --> D[Route to next goal<br/>via lowest common ancestor]
     D --> E[Carrot point<br/>ahead on the route]
@@ -22,7 +22,7 @@ flowchart LR
 
 ### 1. Map preprocessing (`preprocess_map`)
 
-- The 0.2 m grid is upsampled 3 times, to 0.067 m cells, so the walls can be inflated by less than a whole original cell.
+- The 0.2 m grid is upsampled 4 times, to 0.05 m cells, so the walls can be inflated by less than a whole original cell. Each ring below is one fine cell (0.05 m) wide.
 - **Hard ring:** every free fine cell next to a wall becomes a wall (99).
 - **Soft ring:** every free fine cell next to that becomes 75. It can still be crossed, but every node placed there costs extra, so routes keep away from walls when they have room.
 
@@ -44,7 +44,7 @@ One tree serves every goal. For goal *k*, the start is the tree node nearest the
 
 ![CA2 planner](media/ca2/ca2_planner.png)
 
-*Drawn like the code's `print_map()`: +x up, +y to the left. Left: the inflated planning map; the robot may enter the soft ring (it just costs more), never the hard ring. Right: one seeded run of the real planner code (`media/ca2/make_ca2_media.py`), the 2,000-node tree and the four routes. Route 2 stops short of goal 2. Goal 2 sits in a pocket whose only way in is a one-cell (0.2 m) corridor, and the rings fill that corridor until just a 1/3-cell (6.7 cm) soft strip is left, which a tree with 0.2 m steps almost never threads. So this happens on nearly every run, not just this one. The robot treats the end of the route as the goal, so it turns back for goal 3 from there.*
+*Drawn like the code's `print_map()`: +x up, +y to the left. Left: the inflated planning map; the robot may enter the soft ring (it just costs more), never the hard ring. Right: one seeded run of the real planner code (`media/ca2/make_ca2_media.py`), the 2,000-node tree and the four routes, all ending on their goals. Goal 2 sits in a pocket whose only way in is a one-cell (0.2 m) corridor. With 4x upsampling the rings leave a 0.10 m soft strip through it; with the earlier 3x they left only 6.7 cm and the tree almost never got in. The tree is random, so it can still miss: across five seeds route 2 reached goal 2 in three, stopped 0.17 m short in one and 0.66 m short in another. The robot treats the end of the route as the goal.*
 
 ### 4. Path following: carrot point (`get_carrot_target`)
 

@@ -167,7 +167,7 @@ class WaypointNode(Node):
         self.map_array = map_array
         self.origin = origin # World (x, y) coordinate of the grid's [0, 0] corner. Use with grid_to_world()/world_to_grid()
         self.resolution = resolution # Metres per grid cell (0.2). Use with grid_to_world()/world_to_grid()
-        self.map_upsample_factor = 3
+        self.map_upsample_factor = 4
         self.planning_resolution = self.resolution / self.map_upsample_factor
 
         self.frame = frame # Optitrack->maze frame (real robot only), see optitrack_to_maze()
@@ -332,8 +332,8 @@ class WaypointNode(Node):
         self.car_initial_alignment_complete = False
 
     # Upsample the occupancy grid, then apply two one-fine-cell bubbles:
-    # first a hard 99 ring, followed by a softer 75 ring.  Each ring is 1/3
-    # of an original cell because the planning map has 3x resolution.
+    # first a hard 99 ring, followed by a softer 75 ring.  Each ring is 1/4
+    # of an original cell because the planning map has 4x resolution.
     def preprocess_map(self) -> np.ndarray:
         original_map = np.repeat(
             np.repeat(self.map_array, self.map_upsample_factor, axis=0),
