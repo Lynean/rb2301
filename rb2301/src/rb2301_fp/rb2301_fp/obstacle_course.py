@@ -19,7 +19,7 @@ set_logger_level("obstaclecourse", level=LoggingSeverity.INFO) # Configure to ei
 _PACKAGE_DIR = os.path.dirname(os.path.realpath(__file__))
 
 # ---- Speed tuning (change these first) ----
-FORWARD_SPEED = 0.22           # Cruise speed when the corridor is clear (m/s)
+FORWARD_SPEED = 0.3           # Cruise speed when the corridor is clear (m/s)
 MAX_TURN_SPEED = 0.8          # Cap on ALL turning: avoidance and heading hold (rad/s)
 MIN_TURN_SPEED = 0.15         # Avoidance turning rate when the obstacle is at TURN_DISTANCE (rad/s);
                               # rises to MAX_TURN_SPEED at STOP_DISTANCE and closer

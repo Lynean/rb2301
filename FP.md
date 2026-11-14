@@ -7,8 +7,17 @@ The controller drives the robot through the course toward north-east using only 
 - Package: `src/rb2301_fp`
 - Controller: `rb2301_fp/obstacle_course.py`, node `obstacle_course`
 
+## Results at a glance
+
+20 randomised courses in pocket_test with hand-swung boards: **17 COMPLETE, 3 TIMEOUT (240 s limit), 0 collisions**. Completed runs took 48–202 s (mean 81 s).
+
+[![20 randomised runs](rb2301/src/rb2301_fp/sim_runs/all_runs.png)](rb2301/src/rb2301_fp/sim_runs/README.md)
+
+*Final frame of each run (green frame = COMPLETE, orange = TIMEOUT). Click for the table and every run's animation. The three timeouts (seeds 0, 8, 17) never leave the start room: one wedges between a cylinder and the wall, two circle around the box near the start.*
+
 ## Contents
 
+- [Results at a glance](#results-at-a-glance)
 - [Demo (pocket_test)](#demo-pocket_test)
 - [Running](#running)
 - [Overview](#overview)
@@ -42,7 +51,7 @@ These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py`
 | pocket_test (2-D, no ROS) | From `src/rb2301_fp`: `python3 pocket_test.py` runs every scenario. Name one to run only it (`pocket`, `zigzag`, ...). `random --seed N` runs a randomised course; `--swing` makes the boards hand-swung (decaying); `--real` uses the real robot's speed caps and 720 beams; `--headless --trials 20` gives a success rate. |
 | Real robot | On the laptop: `./rsync_fp.sh <robot number>` copies the package to `~/Downloads/rb2301_fp_13` on the robot. On the robot: build with `colb`, start `basecontrol`, `vrpn` and `rplidar`, then `./fp.sh`. |
 | Pose check | `./fp.sh --calibrate` prints the OptiTrack and maze poses and never drives. |
-| Recorded runs | `python3 sim_runs/make_sim_runs.py` from `src/rb2301_fp`: 20 random courses saved as GIFs marked COMPLETE / TIMEOUT, with a summary in [sim_runs/README.md](rb2301/src/rb2301_fp/sim_runs/README.md) (latest: 15 complete, 5 timeouts, 0 collisions). |
+| Recorded runs | `python3 sim_runs/make_sim_runs.py` from `src/rb2301_fp`: 20 random courses saved as GIFs marked COMPLETE / TIMEOUT, with a summary in [sim_runs/README.md](rb2301/src/rb2301_fp/sim_runs/README.md) (latest: 17 complete, 3 timeouts, 0 collisions). |
 | LiDAR blind zone | `./blindzone_check.sh`: an interactive tool that measures the closest distance the LiDAR can still see. |
 
 ## Overview

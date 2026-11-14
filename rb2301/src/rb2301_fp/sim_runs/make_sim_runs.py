@@ -99,12 +99,37 @@ def save_gif(path, scn, frames, title, result):
     plt.close(fig)
 
 
+def make_grid(cols=5, tile=360):
+    '''One image of every run's final frame (full path + result), framed in its result colour.'''
+    import glob
+    from PIL import Image, ImageDraw
+    files = sorted(glob.glob(os.path.join(HERE, "run_*.gif")))
+    colours = {"COMPLETE": (40, 160, 60), "TIMEOUT": (230, 140, 0), "COLLISION": (220, 40, 40)}
+    rows = (len(files) + cols - 1) // cols
+    pad = 6
+    grid = Image.new("RGB", (cols * (tile + pad) + pad, rows * (tile + pad) + pad), "white")
+    for k, path in enumerate(files):
+        im = Image.open(path)
+        im.seek(im.n_frames - 1)
+        frame = im.convert("RGB").resize((tile, tile))
+        result = os.path.basename(path).rsplit("_", 1)[1].split(".")[0]
+        ImageDraw.Draw(frame).rectangle([0, 0, tile - 1, tile - 1], outline=colours.get(result, (0, 0, 0)), width=6)
+        grid.paste(frame, (pad + (k % cols) * (tile + pad), pad + (k // cols) * (tile + pad)))
+    out = os.path.join(HERE, "all_runs.png")
+    grid.save(out, optimize=True)
+    print(f"{out}: {len(files)} runs, {os.path.getsize(out) / 1e6:.1f} MB")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--runs", type=int, default=20, help="Valid runs to make (default 20)")
     parser.add_argument("--first-seed", type=int, default=0, help="First course seed to try (default 0)")
     parser.add_argument("--motorised", action="store_true", help="Full-swing motorised boards instead of hand-swung ones")
+    parser.add_argument("--grid-only", action="store_true", help="Only rebuild all_runs.png from the GIFs already here")
     args = parser.parse_args()
+    if args.grid_only:
+        make_grid()
+        return
     pt.SWING = not args.motorised
     boards = "motorised boards" if args.motorised else "hand-swung boards"
 
@@ -134,6 +159,7 @@ def main():
         f.write(f"# pocket_test: {len(rows)} randomised runs\n\n")
         f.write(f"Randomised final-project courses (same randomisation as `obstacle_modifier.py`) with {boards}, "
                 f"run by the real controller in `pocket_test.py`. Time limit {time_limit:.0f} s per run.\n\n")
+        f.write("![All runs](all_runs.png)\n\n*Final frame of every run: green frame = COMPLETE, orange = TIMEOUT, red = COLLISION.*\n\n")
         f.write("| Result | Runs |\n| --- | --- |\n")
         for r, c in counts.items():
             f.write(f"| {r} | {c} |\n")
@@ -146,6 +172,7 @@ def main():
         for n, sd, r, t, dist, g, name in rows:
             f.write(f"| {n} | {sd} | **{r}** | {t:.1f} | {dist:.1f} | {'-' if g is None else f'{g:.1f}'} | [{name}]({name}) |\n")
         f.write("\nRe-run: `python3 sim_runs/make_sim_runs.py` from `rb2301/src/rb2301_fp` (see the script for options).\n")
+    make_grid()
     print(counts, "rejected:", rejected)
 
 

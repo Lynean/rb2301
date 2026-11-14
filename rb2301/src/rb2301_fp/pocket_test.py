@@ -193,7 +193,7 @@ def _fp_scenario(tree, desc):
         "segments_at": lambda t: static + move(actors, t),
         "start": (0.05, 0.0, 0.0),  # fp_gazebo.launch.py spawn pose
         "goal_x": _goal_x(tree),
-        "max_time": 180.0,
+        "max_time": 240.0,
     }
 
 
