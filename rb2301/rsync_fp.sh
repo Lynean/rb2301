@@ -18,6 +18,5 @@ rsync -auvx --delete \
 
 rsync -auvx \
     /home/nhien/rb2301/rb2301/src/rb2301_fp/fp.sh \
-    /home/nhien/rb2301/rb2301/src/rb2301_fp/obstacle_tracker.sh \
     /home/nhien/rb2301/rb2301/src/rb2301_fp/blindzone_check.sh \
     "${target}:~/Downloads/rb2301_fp_13"

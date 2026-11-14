@@ -132,7 +132,7 @@ GAP_MIN_STANDOFF = 0.10       # ALIGN: line up on the gap's centre line at least
 GAP_MAX_STANDOFF = 0.20       # ...and at most this far (m)
 GAP_ALIGN_TOLERANCE = 0.02    # ALIGN is done when within this of the centre line (m)
 GAP_ALIGN_SPEED = 0.15        # Forward speed while aligning (m/s)
-GAP_SPEED = 0.25               # GO: drive through the gap at this speed (m/s); move_2D caps it at 0.3 on the real robot
+GAP_SPEED = 0.25               # GO: drive through the gap at this speed (m/s); move_2D caps it at 0.5 on the real robot
 GAP_STOP_DISTANCE = 0.20      # GO: wait if anything is this close straight ahead of the body (e.g. a moving box) (m)
 GAP_MAX_CALLS = 600           # Give up on a gap after this many control steps (node: 20 per s)
 GAP_ALIGN_START_DISTANCE = 0.20  # APPROACH hands over to ALIGN within this distance of the alignment point (m)
@@ -180,7 +180,7 @@ BOARD_HALF_THICKNESS = 0.025  # Half the board thickness: the LiDAR sees its nea
 BOARD_WAIT_GAP = 0.08         # APPROACH stops with the body front this far before a board's near face (m)
 BOARD_APPROACH_SPEED = 0.15   # Speed while moving up to a board's axis (m/s)
 BOARD_PATH_MARGIN = 0.05      # Robot's path strip: body half-width + this on each side (m)
-BOARD_CROSS_SPEED = 0.4       # Speed while crossing a board's axis (m/s); move_2D caps it at 0.3 on the real robot
+BOARD_CROSS_SPEED = 0.4       # Speed while crossing a board's axis (m/s); move_2D caps it at 0.5 on the real robot
 BOARD_CLEAR_MARGIN = 0.05     # CROSS ends when the body's rear is this far past the board's far face (m)
 # SIDE: before the first board, go EAST to the east WALL: turn to face east, drive until the wall is just
 # ahead, turn back north. A pendulum sweeps the centre twice per swing at full speed; near the side it only

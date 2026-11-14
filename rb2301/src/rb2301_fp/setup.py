@@ -22,7 +22,6 @@ setup(
     entry_points={
         'console_scripts': [
             'obstacle_course = rb2301_fp.obstacle_course:main',
-            'obstacle_tracker = rb2301_fp.obstacle_tracker:main',
             'blindzone_check = rb2301_fp.blindzone_check:main',
         ],
     },
