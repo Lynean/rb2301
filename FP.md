@@ -25,7 +25,7 @@ The controller drives the robot through the course toward north-east using only 
 
 These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py` re-renders them). Blue box: robot. Orange strip: front corridor; red dots: scan points inside it. Purple: moving boards. Green bar: the gate being used. The caption shows the current state.
 
-**Full course** (random seed 2, hand-swung boards). Clear driving and avoidance, then the gate manoeuvre (APPROACH → ALIGN → TURN → GO). Then the boards: SCAN, SIDE to the east wall, FACE north, APPROACH, WAIT, CROSS, twice. Finishes in about 60 s.
+**Full course** (random seed 2, hand-swung boards). Clear driving and avoidance, then the gate manoeuvre (APPROACH → ALIGN → TURN → GO). Then the boards: SCAN, SIDE to the east wall, FACE north, APPROACH, WAIT, CROSS, twice. Finishes in about 52 s.
 
 ![Full course run](media/fp/fp_full_course.gif)
 
@@ -232,7 +232,7 @@ With nothing within 0.8 m and no lock, the robot steers toward a goal heading ch
 
 ![Heading layers](media/fp/features/heading_layers.png)
 
-*Facing +70° (outside the gold 110° window) with north-east blocked, so layers 1 and 2 fail. Of the open candidate directions (green), the one closest to North or East is chosen (black arrow).*
+*Facing +70° (outside the gold 110° window) with north-east blocked, so layers 1 and 2 fail. Each candidate direction is a narrow cone measured by its median range, one every 15°. Of the open cones (green), the one closest to North or East is chosen (black arrow).*
 
 
 **Why three layers.** Steering straight to north-east all the time turned the robot into walls in narrow places. Layer 1 lets it keep driving along a corridor that already goes roughly the right way. Layer 3 gets it out when north-east is blocked by a wall, instead of pushing into it.
@@ -260,7 +260,7 @@ The gate is a gap between the ends of two long, straight walls, with the gap run
 
 ![Gate detection](media/fp/features/gate_detection.png)
 
-*Piece ends (orange crosses) are the candidate edges. The accepted gap (green) sits between two straight, axis-aligned wall-end runs (blue) and runs East–West; its centre is north of the robot, so it is a front gate.*
+*The same gate with one box added beyond it. Left: the box is 0.6 m beyond the gap, so its points are seen through the opening (allowed, check 4); the gap (green) sits between two straight, axis-aligned wall ends (blue) and is accepted. Right: the box is 0.15 m beyond, inside the zone that must be empty (gold, check 7), so the same gap is rejected.*
 
 
 **Front or back.** The caller decides this by where the gap centre is, not by which way the robot faces. Let *past* = (robot position − gap centre) · north.
@@ -343,7 +343,7 @@ It waits if the board is moving toward the shorter end, because it will come bac
 
 ![Board crossing clip](media/fp/features/boards.gif)
 
-*SCAN finds one board's path (magenta dashed), SIDE drives to the east wall, FACE turns north, then APPROACH, WAIT (the caption shows why it waits or goes) and CROSS, once per board.*
+*Seed 16 with full-swing boards, so a board really sweeps across the robot's path. SCAN finds one board's path (magenta dashed), SIDE drives to the east wall, FACE turns north, then APPROACH and WAIT: the robot holds while the board is in front, and crosses as soon as it is moving away toward the longer end of its swing. Then a fresh SCAN for the second board.*
 
 
 ## Iterative optimisation

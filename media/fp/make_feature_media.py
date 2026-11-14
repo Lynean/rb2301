@@ -307,9 +307,10 @@ if wanted("heading_layers"):
     depths = oc._cone_depths(msg, [oc.wrap_deg(w - hd) for w in world])
     lx, ly = x + oc.LASER_X_OFFSET * math.cos(math.radians(hd)), y + oc.LASER_X_OFFSET * math.sin(math.radians(hd))
     for w, dep in zip(world, depths):
-        r = min(dep, 1.3)
+        # One cone per candidate direction (+-HEADING_CONE_HALF_DEG, median range); drawn up to 1.3 m
         col = "tab:green" if dep >= oc.HEADING_OPEN_DEPTH else "tab:red"
-        ax.plot([lx, lx + r * math.cos(math.radians(w))], [ly, ly + r * math.sin(math.radians(w))], color=col, lw=1.5, alpha=0.7)
+        ax.add_patch(Polygon(pt.cone_polygon(x, y, math.radians(hd), +1, min(dep, 1.3), oc.wrap_deg(w - hd), oc.HEADING_CONE_HALF_DEG),
+                             closed=True, fc=col, ec="white", lw=0.8, alpha=0.45, zorder=2))
     t = math.radians(oc.TARGET_HEADING_DEG)
     half = math.radians(oc.HEADING_ON_COURSE_DEG / 2)
     ax.add_patch(Polygon([(x, y)] + [(x + 1.5 * math.cos(a_), y + 1.5 * math.sin(a_)) for a_ in np.linspace(t - half, t + half, 20)],
@@ -324,53 +325,74 @@ if wanted("heading_layers"):
     caption(ax, f"heading {hd:+.0f} deg: outside the 110 deg window (layer 1: no)\n"
                 f"north-east cone < {oc.HEADING_OPEN_DEPTH:.1f} m deep (layer 2: no)\n"
                 f"layer 3 -> {label}\n"
+                f"cones every {oc.HEADING_CANDIDATE_STEP_DEG:.0f} deg (+-{oc.HEADING_CONE_HALF_DEG} deg, median range)\n"
                 f"green = open (>= {oc.HEADING_OPEN_DEPTH:.1f} m), red = blocked")
     ax.text(1.0, 1.35, "north ->", fontsize=9)
     save_png(fig, "heading_layers")
 
-# ---------------------------------------------------------------- 8. gate detection
+# ---------------------------------------------------------------- 8. gate detection (+ "empty beyond")
 if wanted("gate_detection"):
     scn = pt.randomised_fp_scenario(2)
     pt.SWING = True
     frames = pt.simulate(scn)
     f = next(f for f in frames if f["corridor"].get("gap_phase") == "APPROACH")
     x, y, h = f["x"], f["y"], f["h"]
-    msg = pt.raycast_scan(scn["segments_at"](f["t"]), x, y, h, 360)
-    pts, _ = oc.scan_to_robot_points(msg)
-    gaps = oc.detect_gaps(pts, math.degrees(h), oc.NORTH_DEG)
-    near = oc._bearing_sorted(pts, oc.GAP_DETECT_RANGE)
-    nn = len(near)
-    ext = np.concatenate((near, near, near))
-    step_after = np.hypot(*(ext[1:] - ext[:-1]).T)
-    ends = [k for k in range(nn, 2 * nn) if step_after[k] > oc._wall_step(ext[k])]
-    th = math.radians(math.degrees(h))
+    base_segs = scn["segments_at"](f["t"])
+    th = h
     axes = (np.array((math.cos(th), -math.sin(th))), np.array((math.sin(th), math.cos(th))))
-    fig, ax = base_axes({"segments": scn["segments_at"](f["t"])}, "Gate detection: an East-West gap between two straight wall ends",
-                        (x - 1.4, x + 1.8, y - 1.7, y + 1.5), size=(6.8, 6.8))
-    wp = to_world(pts, x, y, h)
-    ax.scatter(wp[:, 0], wp[:, 1], s=4, c="gray", zorder=3)
-    nw = to_world(near, x, y, h)
-    ax.scatter(nw[:, 0], nw[:, 1], s=8, c="k", zorder=3, label=f"points within {oc.GAP_DETECT_RANGE} m")
-    ew = to_world(ext[ends], x, y, h)
-    ax.scatter(ew[:, 0], ew[:, 1], s=60, marker="x", c="tab:orange", zorder=6, label="piece ends")
-    ang = np.linspace(0, 2 * math.pi, 100)
-    lx, ly = to_world([(oc.LASER_X_OFFSET, 0)], x, y, h)[0]
-    ax.plot(lx + oc.GAP_DETECT_RANGE * np.cos(ang), ly + oc.GAP_DETECT_RANGE * np.sin(ang), ":", color="gray", lw=1)
-    for g in gaps[:1]:
-        ia = next(k for k in range(nn, 2 * nn) if np.allclose(ext[k], g["a"]))
-        jb = next(k for k in range(ia + 1, 3 * nn) if np.allclose(ext[k], g["b"]))
-        for run in (oc._axis_wall_end(ext, ia, -1, axes), oc._axis_wall_end(ext, jb, +1, axes)):
-            rw = to_world(run, x, y, h)
-            ax.plot(rw[:, 0], rw[:, 1], color="tab:blue", lw=6, alpha=0.6, zorder=4)
-        ab = to_world([g["a"], g["b"]], x, y, h)
-        ax.plot(ab[:, 0], ab[:, 1], color="limegreen", lw=5, zorder=5, label=f"gap {g['width']:.2f} m (East-West)")
-        cw = to_world([g["center"]], x, y, h)[0]
-        nrm = to_world([g["center"] + g["normal"] * 0.3], x, y, h)[0] - cw
-        ax.annotate("", xy=cw + nrm, xytext=cw, arrowprops=dict(arrowstyle="->", color="limegreen", lw=2))
-    ax.plot([], [], color="tab:blue", lw=6, alpha=0.6, label="straight X/Y wall-end runs")
-    draw_robot(ax, x, y, h, corridor=False)
-    ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
-    caption(ax, "front gate: gap centre is north of the robot\n-> gate manoeuvre (APPROACH)")
+
+    def gate_scan(segs):
+        pts, _ = oc.scan_to_robot_points(pt.raycast_scan(segs, x, y, h, 360))
+        return pts, oc.detect_gaps(pts, math.degrees(h), oc.NORTH_DEG)
+
+    # The real gap (no extra box) gives where "beyond" is
+    _, gaps0 = gate_scan(base_segs)
+    g0 = gaps0[0]
+    ctr_w = to_world([g0["center"]], x, y, h)[0]
+    nrm_w = to_world([g0["center"] + g0["normal"]], x, y, h)[0] - ctr_w
+    tan_w = np.array((-nrm_w[1], nrm_w[0]))
+    a_w, b_w = to_world([g0["a"], g0["b"]], x, y, h)
+
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5.0), dpi=DPI)
+    fig.subplots_adjust(left=0.05, right=0.98, top=0.88, bottom=0.06, wspace=0.1)
+    for ax, depth_box, title in ((axs[0], 0.60, "Box 0.6 m beyond the gap: seen THROUGH it -> gate accepted"),
+                                 (axs[1], 0.15, "Box 0.15 m beyond the gap: inside the empty zone -> rejected")):
+        bc = ctr_w + nrm_w * (depth_box + 0.06)
+        segs = base_segs + pt.box(bc[0], bc[1], 0.12, 0.12)
+        pts, gaps = gate_scan(segs)
+        for (px, py), (qx, qy) in segs:
+            ax.plot([px, qx], [py, qy], color="saddlebrown", lw=3, zorder=1)
+        wp = to_world(pts, x, y, h)
+        ax.scatter(wp[:, 0], wp[:, 1], s=5, c="k", zorder=3)
+        # The zone that must be empty: between the edges (3 cm in), 2-30 cm beyond the gap line
+        half = g0["width"] / 2.0 - 0.03
+        zone = [ctr_w + tan_w * u + nrm_w * v for u, v in ((-half, 0.02), (half, 0.02), (half, oc.GAP_OPEN_DEPTH), (-half, oc.GAP_OPEN_DEPTH))]
+        ax.add_patch(Polygon(zone, closed=True, fc="gold", ec="goldenrod", alpha=0.35, zorder=2,
+                             label=f"must be empty (2-{oc.GAP_OPEN_DEPTH * 100:.0f} cm beyond)"))
+        found = [g for g in gaps if np.hypot(*(to_world([g["center"]], x, y, h)[0] - ctr_w)) < 0.2]
+        if found:
+            g = found[0]
+            near = oc._bearing_sorted(pts, oc.GAP_DETECT_RANGE)
+            nn = len(near)
+            ext = np.concatenate((near, near, near))
+            ia = next(k for k in range(nn, 2 * nn) if np.allclose(ext[k], g["a"]))
+            jb = next(k for k in range(ia + 1, 3 * nn) if np.allclose(ext[k], g["b"]))
+            for run in (oc._axis_wall_end(ext, ia, -1, axes), oc._axis_wall_end(ext, jb, +1, axes)):
+                rw = to_world(run, x, y, h)
+                ax.plot(rw[:, 0], rw[:, 1], color="tab:blue", lw=6, alpha=0.6, zorder=4)
+            ab = to_world([g["a"], g["b"]], x, y, h)
+            ax.plot(ab[:, 0], ab[:, 1], color="limegreen", lw=5, zorder=5, label=f"gate {g['width']:.2f} m: accepted")
+            ax.plot([], [], color="tab:blue", lw=6, alpha=0.6, label="straight X/Y wall-end runs")
+        else:
+            ax.plot([a_w[0], b_w[0]], [a_w[1], b_w[1]], color="red", lw=4, ls="--", zorder=5, label="same gap: rejected")
+        ax.add_patch(Polygon(pt.footprint(x, y, h), closed=True, fc="steelblue", ec="k", zorder=5))
+        ax.set_aspect("equal")
+        ax.set_xlim(x - 1.1, x + 2.0)
+        ax.set_ylim(y - 1.3, y + 1.1)
+        ax.grid(True, alpha=0.3)
+        ax.set_title(title, fontsize=10)
+        ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
+    fig.suptitle("Gate detection: an East-West gap between two straight wall ends, with nothing just beyond it", fontsize=11)
     save_png(fig, "gate_detection")
 
 # ---------------------------------------------------------------- 9. gate manoeuvre (clip)
@@ -384,10 +406,11 @@ if wanted("gate_manoeuvre"):
          every=1, swing=True, gate=True)
 
 # ---------------------------------------------------------------- 10. board crossing (clip)
+BOARD_SEED, BOARD_SWING = 16, False  # A course where the board really sweeps across the robot's path while it waits
 if wanted("boards"):
-    scn = pt.randomised_fp_scenario(2)
-    pt.SWING = True
+    scn = pt.randomised_fp_scenario(BOARD_SEED)
+    pt.SWING = BOARD_SWING
     probe = pt.simulate(scn)
     t_a = next(f["t"] for f in probe if f["corridor"].get("board_phase"))
-    clip("boards", scn, "Board crossing: SCAN, SIDE, FACE, APPROACH, WAIT, CROSS", t_a, probe[-1]["t"],
-         every=2, swing=True, boards=True)
+    clip("boards", scn, f"Board crossing (seed {BOARD_SEED}): SCAN, SIDE, FACE, APPROACH, WAIT, CROSS", t_a, probe[-1]["t"],
+         every=2, swing=BOARD_SWING, boards=True)

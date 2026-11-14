@@ -909,10 +909,11 @@ def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
             driven = float(np.hypot(*(here - b["side_start"])))
             if abs(math.degrees(e)) > GAP_FACE_TOLERANCE_DEG:
                 turn = math.copysign(float(np.clip(GAP_ALIGN_GAIN * abs(e), MIN_TURN_SPEED, MAX_TURN_SPEED)), e)
-            elif (front_gap <= BOARD_SIDE_WALL_CLEARANCE or driven >= BOARD_SIDE_OFFSET
+            # 1 cm tolerance: the speed below shrinks to 0 at the clearance, so it would never quite get there
+            elif ((at_wall := front_gap <= BOARD_SIDE_WALL_CLEARANCE + 0.01) or driven >= BOARD_SIDE_OFFSET
                     or now - b["phase_t"] > BOARD_SIDE_MAX_TIME):
                 enter("FACE")
-                reason = "at the east wall" if front_gap <= BOARD_SIDE_WALL_CLEARANCE else "went as far east as allowed"
+                reason = "at the east wall" if at_wall else "went as far east as allowed"
             else:
                 turn = float(np.clip(GAP_ALIGN_GAIN * e, -MAX_TURN_SPEED, MAX_TURN_SPEED))
                 forward = min(BOARD_SIDE_SPEED, front_gap - BOARD_SIDE_WALL_CLEARANCE)
