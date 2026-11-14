@@ -9,11 +9,11 @@ The controller drives the robot through the course toward north-east using only 
 
 ## Results at a glance
 
-20 randomised courses in pocket_test with hand-swung boards: **17 COMPLETE, 3 TIMEOUT (240 s limit), 0 collisions**. Completed runs took 48–202 s (mean 81 s).
+20 randomised courses in pocket_test with hand-swung boards: **15 COMPLETE, 5 TIMEOUT (240 s limit), 0 collisions**. Completed runs took 40–66 s (mean 51 s).
 
 [![20 randomised runs](rb2301/src/rb2301_fp/sim_runs/all_runs.png)](rb2301/src/rb2301_fp/sim_runs/README.md)
 
-*Final frame of each run (green frame = COMPLETE, orange = TIMEOUT). Click for the table and every run's animation. The three timeouts (seeds 0, 8, 17) never leave the start room: one wedges between a cylinder and the wall, two circle around the box near the start.*
+*Final frame of each run (green frame = COMPLETE, orange = TIMEOUT). Click for the table and every run's animation. All five timeouts are slow orbits the turn lock and dead-end memory do not catch: seed 0 gets stuck beside a cylinder near the start, seeds 8 and 17 circle in the west end of the start room, and seeds 1 and 3 circle at the corner where the course turns south.*
 
 ## Contents
 
@@ -51,7 +51,7 @@ These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py`
 | pocket_test (2-D, no ROS) | From `src/rb2301_fp`: `python3 pocket_test.py` runs every scenario. Name one to run only it (`pocket`, `zigzag`, ...). `random --seed N` runs a randomised course; `--swing` makes the boards hand-swung (decaying); `--real` uses the real robot's speed caps and 720 beams; `--headless --trials 20` gives a success rate. |
 | Real robot | On the laptop: `./rsync_fp.sh <robot number>` copies the package to `~/Downloads/rb2301_fp_13` on the robot. On the robot: build with `colb`, start `basecontrol`, `vrpn` and `rplidar`, then `./fp.sh`. |
 | Pose check | `./fp.sh --calibrate` prints the OptiTrack and maze poses and never drives. |
-| Recorded runs | `python3 sim_runs/make_sim_runs.py` from `src/rb2301_fp`: 20 random courses saved as GIFs marked COMPLETE / TIMEOUT, with a summary in [sim_runs/README.md](rb2301/src/rb2301_fp/sim_runs/README.md) (latest: 17 complete, 3 timeouts, 0 collisions). |
+| Recorded runs | `python3 sim_runs/make_sim_runs.py` from `src/rb2301_fp`: 20 random courses saved as GIFs marked COMPLETE / TIMEOUT, with a summary in [sim_runs/README.md](rb2301/src/rb2301_fp/sim_runs/README.md) (latest: 15 complete, 5 timeouts, 0 collisions). |
 | LiDAR blind zone | `./blindzone_check.sh`: an interactive tool that measures the closest distance the LiDAR can still see. |
 
 ## Overview
@@ -75,41 +75,21 @@ These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py`
 
 All the decision logic is written as pure functions with no ROS code (`avoidance_command` and the functions it calls). That way pocket_test runs exactly the same logic as the robot.
 
-**Feature list**
+### Feature list
 
-1. Preprocessing
-    1. Scan to robot-frame points (LiDAR yaw and offset, invalid returns dropped)
-    2. Virtual dead-end walls cast into the scan before preprocessing, after 5 jiggles
-    3. Scanned coordinate points sorted by their LiDAR angle (from −180 to 0 to 180°) → to separate objects ↔ gate detection
-    4. For the moving-board detection state: scans have a timestamp attached, used to estimate the moving boards' speed and their movement coverage (the motion window in their last 3–6 seconds)
-2. Front corridor (main idea): a rectangular corridor 2 m long in front of the robot
-    1. Obstacle extraction: grouping close corridor points into obstacles → lock the turn direction for each obstacle, and release the lock when that obstacle has left the corridor (handed over to the next obstacle if there is one)
-    2. Speed: slow down if an obstacle is near; too near = back up
-3. Case 1: obstacle in the corridor → two side cones, each with sub-cones (number and layout set by parameters)
-    1. Two side cones (left, right) decide whether the robot turns left or right
-    2. Each side cone has sub-cones that scan for the deepest opening on that side → the deepest sub-cone of each side is compared
-    3. The side cone whose opening is closest to North or East gets a bonus score
-    4. Cone switch with margin, scan count, cooldown and a slow-down for big switches
-    5. Turn rate that grows as the obstacle gets closer
-    6. Side check of the area the body sweeps, counter-turn, give-up flip
-    7. Back-up with a rear check
-    8. Dead-end memory (virtual walls)
-4. Case 2: corridor clear (the first layer that applies wins)
-    1. Layer 1: already within ±55° of north-east, keep going
-    2. Layer 2: north-east open, steer to it
-    3. Layer 3: sticky detour toward the open direction closest to North or East
-    4. Heading hold with a side check
-5. Gate detection
-    1. Gap candidates over the whole 360° scan (0.30–0.80 m wide, East–West within 10°)
-    2. Through-gap points allowed between the two edges
-    3. Wall-end check: long, straight, along the world X or Y axis, end-face skip
-    4. Closed-line check
-    5. Empty space beyond the gap
-    6. Front or back, decided by where the gap is relative to the robot
-6. State machine
-    1. Gate manoeuvre: APPROACH → ALIGN → TURN → GO
-    2. Board crossing: SCAN → SIDE → FACE → APPROACH → WAIT → CROSS, repeated for each board
-    3. Fallbacks: gate retry, false gate, timeouts
+Every step, one scan and one pose flow through the stages below and come out as one velocity command:
+
+> **Scan + pose** → **1. Preprocessing** → **2. Front corridor** → **3. Obstacle** *or* **4. Clear** → **`cmd_vel`**<br>
+> ↳ Running alongside: **5. Gate detection**, which hands over to the **6. State machine** (gate, then boards)
+
+| Stage | Its job | What's inside |
+| --- | --- | --- |
+| **1. [Preprocessing](#preprocessing)** | Turn the raw scan into clean points | • Scan → robot-frame points (LiDAR yaw and offset, bad returns dropped)<br>• Virtual dead-end walls cast into the scan<br>• Points sorted by bearing (−180° → 180°) so objects and gaps separate cleanly<br>• Scan timestamps for board speed and swing (last 3–6 s) |
+| **2. [Front corridor](#main-idea-the-front-corridor)** ⭐ main idea | Only react to what is straight ahead (2 m × 0.38 m) | • Group corridor points into obstacles; the nearest one decides<br>• One locked turn per obstacle, released when it leaves (or handed over)<br>• Slow down when near, back up when too near |
+| **3. [Obstacle ahead](#case-1-obstacle-in-the-corridor)** | Pick the better side and commit | • Left vs right side cones, each searched by sub-cones for its deepest opening<br>• Bonus for the side opening toward North or East<br>• Careful cone switch (margin, scan count, cooldown, slow-down)<br>• Turn harder as the obstacle gets closer<br>• Side check of the swept body area → counter-turn, give-up flip<br>• Back-up with a rear check · dead-end memory (virtual walls) |
+| **4. [Corridor clear](#case-2-corridor-clear)** | Choose a heading and hold it | • Layer 1: already within ±55° of north-east → keep going<br>• Layer 2: north-east open → steer to it<br>• Layer 3: sticky detour toward the open direction closest to North or East<br>• Heading hold, with the same side check |
+| **5. [Gate detection](#gate-detection)** | Find the real gate in the whole 360° scan | • Gap 0.30–0.80 m wide, running East–West (±10°)<br>• Points seen through the gap allowed<br>• Wall ends: long, straight, on a world axis (end face skipped)<br>• Closed line and empty space beyond the gap<br>• Front or back gate, from where the gap is |
+| **6. [State machine](#final-state-machine)** | Drive the special manoeuvres | • Gate: APPROACH → ALIGN → TURN → GO<br>• Boards: SCAN → SIDE → FACE → APPROACH → WAIT → CROSS, per board<br>• Fallbacks: gate retry, false gate, timeouts |
 
 ## Preprocessing
 
@@ -158,7 +138,7 @@ The robot only reacts to what is in a rectangle straight ahead of it: 2.0 m long
 *Only points inside the orange rectangle count. The wall grazing the edge is ignored as a sliver; the nearest obstacle (red) decides the speed and the turn; the one behind it waits its turn.*
 
 
-**Speed from distance.** The forward speed falls linearly from 0.22 m/s at 0.6 m to 0 at 0.17 m. Below 0.19 m the robot backs up at 0.1 m/s until the obstacle is 0.27 m away (Case 1 below).
+**Speed from distance.** The forward speed falls linearly from 0.3 m/s at 0.6 m to 0 at 0.17 m. Below 0.19 m the robot backs up at 0.1 m/s until the obstacle is 0.27 m away (Case 1 below).
 
 **The two cases**
 
@@ -402,7 +382,7 @@ All values are constants at the top of `obstacle_course.py`, as they stand in th
 
 | Group | Parameter | Value |
 | --- | --- | --- |
-| Speed | `FORWARD_SPEED` / `BACKUP_SPEED` | 0.22 / 0.1 m/s |
+| Speed | `FORWARD_SPEED` / `BACKUP_SPEED` | 0.3 / 0.1 m/s |
 | Speed | `MIN_TURN_SPEED` – `MAX_TURN_SPEED` | 0.15 – 0.8 rad/s |
 | Speed | `HEADING_GAIN` | 0.8 rad/s per rad |
 | Corridor | `CORRIDOR_LENGTH` × width | 2.0 × 0.38 m |

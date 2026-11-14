@@ -147,7 +147,9 @@ def main():
         n = len(rows) + 1
         name = f"run_{n:02d}_seed_{seed}_{result}.gif"
         travelled = sum(math.hypot(b["x"] - a["x"], b["y"] - a["y"]) for a, b in zip(frames, frames[1:]))
-        gate = next((f["t"] for f in frames if f["corridor"].get("gate_passed") or f["corridor"].get("board_phase")), None)
+        # Real gate: a moving board was found after it (a false gate's SCAN finds nothing and normal driving resumes)
+        gate = next((f["t"] for f in frames if (f["corridor"].get("board_phase") or "").split(" (")[0]
+                     in ("SIDE", "FACE", "APPROACH", "WAIT", "CROSS")), None)
         save_gif(os.path.join(HERE, name), scn, frames, f"Run {n} (seed {seed}, {boards})", result)
         rows.append((n, seed, result, frames[-1]["t"], travelled, gate, name))
         print(f"run {n:2d}  seed {seed:3d}  {result:9s}  t={frames[-1]['t']:5.1f}s  {travelled:5.1f} m  -> {name}", flush=True)
@@ -167,7 +169,7 @@ def main():
             f.write(f"\nCompleted runs took {min(done):.0f}–{max(done):.0f} s (mean {sum(done) / len(done):.0f} s).\n")
         if rejected:
             f.write(f"\nRejected (robot spawned on top of an obstacle): seeds {', '.join(map(str, rejected))}.\n")
-        f.write("\n| Run | Seed | Result | Time (s) | Distance (m) | Gate passed at (s) | Animation |\n"
+        f.write("\n| Run | Seed | Result | Time (s) | Distance (m) | Boards reached at (s) | Animation |\n"
                 "| --- | --- | --- | --- | --- | --- | --- |\n")
         for n, sd, r, t, dist, g, name in rows:
             f.write(f"| {n} | {sd} | **{r}** | {t:.1f} | {dist:.1f} | {'-' if g is None else f'{g:.1f}'} | [{name}]({name}) |\n")
