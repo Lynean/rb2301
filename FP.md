@@ -217,7 +217,7 @@ When the nearest obstacle is within 0.8 m, the robot picks a turn side once, loc
 
     ![Back-up and dead-end clip](media/fp/features/deadend.gif)
 
-    *In a dead end the robot backs up while turning, tries again, and after 5 back-ups at the same spot places a virtual wall (orange dotted) across it, then chooses a new way.*
+    *In a 0.6 m-wide dead end the robot backs up while turning and tries again. After 5 back-ups at the same spot it places a virtual wall (orange dotted) across it, decides the turn again with the wall in place, and drives out.*
 
 
 ## Case 2: corridor clear

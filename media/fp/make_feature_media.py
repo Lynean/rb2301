@@ -288,10 +288,11 @@ if wanted("deadend"):
 
     def P(s, t):
         return (-0.5 * d[0] + s * d[0] + t * n[0], -0.5 * d[1] + s * d[1] + t * n[1])
-    pocket = [(P(0, 0.25), P(1.2, 0.25)), (P(1.2, 0.25), P(1.2, -0.25)), (P(1.2, -0.25), P(0, -0.25))]
-    scn = {"desc": "", "segments": pt.arena(5.0, 5.0) + pocket, "start": (0.0, 0.0, -45.0), "max_time": 40}
-    clip("deadend", scn, "Back-up, and a virtual wall after 5 back-ups at the same spot", 0.0, 32.0,
-         every=3, bounds=(-1.2, 1.8, -1.6, 1.4))
+    pocket = [(P(0, 0.3), P(1.2, 0.3)), (P(1.2, 0.3), P(1.2, -0.3)), (P(1.2, -0.3), P(0, -0.3))]  # 0.6 m wide dead end
+    # Arena walls kept well away from the dead end's mouth (pt.arena() always has its left wall at x = -0.5)
+    scn = {"desc": "", "segments": pt.box(0.5, 0.0, 6.0, 6.0) + pocket, "start": (0.0, 0.0, -45.0), "max_time": 48}
+    clip("deadend", scn, "Dead end: back up, virtual wall after 5 back-ups, then drive out", 0.0, 46.0,
+         every=3, bounds=(-1.6, 3.2, -2.4, 2.4))
 
 # ---------------------------------------------------------------- 7. corridor clear: heading layers
 if wanted("heading_layers"):
