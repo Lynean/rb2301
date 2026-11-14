@@ -66,11 +66,13 @@ def show_map(ax, fine, title):
     layer = np.where(original, 3, np.where(fine == 99, 2, np.where(fine == 75, 1, 0)))
     cmap = ListedColormap(["white", "#fde3b0", "#e8902c", "#5a3a1a"])
     x1, y1 = origin[0] + grid.shape[0] * res, origin[1] + grid.shape[1] * res
-    ax.imshow(layer.T, origin="lower", extent=[origin[0], x1, origin[1], y1], cmap=cmap, vmin=0, vmax=3, interpolation="nearest")
+    # Drawn like the code's print_map(): +x up, +y to the left (rows = x, columns = y, y axis reversed)
+    ax.imshow(layer, origin="lower", extent=[origin[1], y1, origin[0], x1], cmap=cmap, vmin=0, vmax=3, interpolation="nearest")
+    ax.set_xlim(y1, origin[1])
     ax.set_aspect("equal")
     ax.set_title(title, fontsize=10)
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
+    ax.set_xlabel("y (m)   (+y to the left)")
+    ax.set_ylabel("x (m)")
 
 
 def figure_planner():
@@ -78,34 +80,34 @@ def figure_planner():
     print("building the RRT* tree (2000 nodes)...", flush=True)
     tree = build_tree(fine)
     paths = routes(tree)
-    fig, axs = plt.subplots(1, 2, figsize=(13, 6.6), dpi=DPI)
-    fig.subplots_adjust(left=0.05, right=0.99, top=0.88, bottom=0.08, wspace=0.12)
+    fig, axs = plt.subplots(1, 2, figsize=(12, 8.8), dpi=DPI)
+    fig.subplots_adjust(left=0.05, right=0.99, top=0.9, bottom=0.14, wspace=0.1)
 
     show_map(axs[0], fine, "1. Map preprocessing: 3x finer grid + two obstacle rings")
     from matplotlib.patches import Patch
     axs[0].legend(handles=[Patch(fc="#5a3a1a", label="wall (original map)"), Patch(fc="#e8902c", label="hard ring: wall (99)"),
                            Patch(fc="#fde3b0", ec="#e0c080", label="soft ring: allowed, costs +75"), Patch(fc="white", ec="gray", label="free")],
-                  loc="upper right", fontsize=8, framealpha=0.95)
+                  loc="lower right", fontsize=8, framealpha=0.95)
 
     show_map(axs[1], fine, "2-3. RRT* tree (2000 nodes) and the route to each goal")
     for node in tree.nodes:
         parent = tree.getParentNode(node.id)
         if parent is not None:
-            axs[1].plot([parent.pos[0], node.pos[0]], [parent.pos[1], node.pos[1]], color="0.55", lw=0.4, zorder=2)
+            axs[1].plot([parent.pos[1], node.pos[1]], [parent.pos[0], node.pos[0]], color="0.55", lw=0.4, zorder=2)
     colours = ["tab:blue", "tab:green", "tab:purple", "tab:red"]
     prev = start
     for k, (path, goal, col) in enumerate(zip(paths, goals, colours)):
         xs, ys = [n.pos[0] for n in path], [n.pos[1] for n in path]
         # Earlier routes thicker and underneath, so shared stretches still show every route
-        axs[1].plot(xs, ys, color=col, lw=7.0 - 1.6 * k, alpha=0.9, solid_capstyle="round", zorder=4 + k,
+        axs[1].plot(ys, xs, color=col, lw=7.0 - 1.6 * k, alpha=0.9, solid_capstyle="round", zorder=4 + k,
                     label=f"route {k + 1}: {prev} -> {goal}")
-        axs[1].plot(*goal, marker="o", ms=11, color=col, mec="k", zorder=5)
-        axs[1].text(goal[0] + 0.12, goal[1] + 0.12, str(k + 1), fontsize=11, fontweight="bold", color=col, zorder=6,
+        axs[1].plot(goal[1], goal[0], marker="o", ms=11, color=col, mec="k", zorder=5)
+        axs[1].text(goal[1] - 0.15, goal[0] + 0.15, str(k + 1), fontsize=11, fontweight="bold", color=col, zorder=6,
                     bbox=dict(fc="white", ec=col, boxstyle="circle,pad=0.15"))
         prev = goal
-    axs[1].plot(*start, marker="s", ms=10, color="k", zorder=5)
-    axs[1].text(start[0] + 0.12, start[1] - 0.3, "start", fontsize=9, zorder=6)
-    axs[1].legend(loc="lower right", fontsize=7.5, framealpha=0.95)
+    axs[1].plot(start[1], start[0], marker="s", ms=10, color="k", zorder=5)
+    axs[1].text(start[1] - 0.15, start[0] - 0.3, "start", fontsize=9, zorder=6)
+    axs[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.09), ncol=2, fontsize=8, framealpha=0.95)
     fig.suptitle("CA2 planner on the simulation maze (one tree from the start, reused for every goal)", fontsize=11)
     path = os.path.join(HERE, "ca2_planner.png")
     fig.savefig(path, dpi=DPI)
