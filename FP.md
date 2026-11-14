@@ -260,7 +260,7 @@ The gate is a gap between the ends of two long, straight walls, with the gap run
 
 ![Gate detection](media/fp/features/gate_detection.png)
 
-*The same gate with one box added beyond it. Left: the box is 0.6 m beyond the gap, so its points are seen through the opening (allowed, check 4); the gap (green) sits between two straight, axis-aligned wall ends (blue) and is accepted. Right: the box is 0.15 m beyond, inside the zone that must be empty (gold, check 7), so the same gap is rejected.*
+*Closed-line check (check 6). Both openings are 0.4 m wide, run East–West and have straight wall ends, so they pass the other checks. Left: the gap is in a solid wall, so the only beams that reach beyond the gate line pass through the gap (green): accepted. Right: the gap is between two boxes, and beams pass beside the boxes, crossing the line outside the gap within 1 m of its centre (red): the line is not a wall, so it is rejected. With this one check switched off, the two boxes would be taken as the gate.*
 
 
 **Front or back.** The caller decides this by where the gap centre is, not by which way the robot faces. Let *past* = (robot position − gap centre) · north.

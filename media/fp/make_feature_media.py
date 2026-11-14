@@ -330,69 +330,65 @@ if wanted("heading_layers"):
     ax.text(1.0, 1.35, "north ->", fontsize=9)
     save_png(fig, "heading_layers")
 
-# ---------------------------------------------------------------- 8. gate detection (+ "empty beyond")
+# ---------------------------------------------------------------- 8. gate detection: the closed-line check
 if wanted("gate_detection"):
-    scn = pt.randomised_fp_scenario(2)
-    pt.SWING = True
-    frames = pt.simulate(scn)
-    f = next(f for f in frames if f["corridor"].get("gap_phase") == "APPROACH")
-    x, y, h = f["x"], f["y"], f["h"]
-    base_segs = scn["segments_at"](f["t"])
-    th = h
-    axes = (np.array((math.cos(th), -math.sin(th))), np.array((math.sin(th), math.cos(th))))
-
-    def gate_scan(segs):
-        pts, _ = oc.scan_to_robot_points(pt.raycast_scan(segs, x, y, h, 360))
-        return pts, oc.detect_gaps(pts, math.degrees(h), oc.NORTH_DEG)
-
-    # The real gap (no extra box) gives where "beyond" is
-    _, gaps0 = gate_scan(base_segs)
-    g0 = gaps0[0]
-    ctr_w = to_world([g0["center"]], x, y, h)[0]
-    nrm_w = to_world([g0["center"] + g0["normal"]], x, y, h)[0] - ctr_w
-    tan_w = np.array((-nrm_w[1], nrm_w[0]))
-    a_w, b_w = to_world([g0["a"], g0["b"]], x, y, h)
-
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5.0), dpi=DPI)
+    room = pt.box(1.0, 0.0, 6.0, 6.0)
+    behind = pt.box(2.2, 0.0, 0.3, 0.3) + pt.circle(2.6, 1.3, 0.2) + pt.circle(2.4, -1.2, 0.2)
+    wall = [((0.95, 0.2), (0.95, 3.0)), ((0.95, -0.2), (0.95, -3.0)), ((1.05, 0.2), (1.05, 3.0)), ((1.05, -0.2), (1.05, -3.0)),
+            ((0.95, 0.2), (1.05, 0.2)), ((0.95, -0.2), (1.05, -0.2))]
+    boxes = pt.box(1.0, 0.45, 0.1, 0.5) + pt.box(1.0, -0.45, 0.1, 0.5)
+    lidar = np.array((oc.LASER_X_OFFSET, 0.0))
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6.0), dpi=DPI)
     fig.subplots_adjust(left=0.05, right=0.98, top=0.88, bottom=0.06, wspace=0.1)
-    for ax, depth_box, title in ((axs[0], 0.60, "Box 0.6 m beyond the gap: seen THROUGH it -> gate accepted"),
-                                 (axs[1], 0.15, "Box 0.15 m beyond the gap: inside the empty zone -> rejected")):
-        bc = ctr_w + nrm_w * (depth_box + 0.06)
-        segs = base_segs + pt.box(bc[0], bc[1], 0.12, 0.12)
-        pts, gaps = gate_scan(segs)
+    for ax, segs, title in ((axs[0], room + behind + wall, "Real gate: a gap in a solid wall"),
+                            (axs[1], room + behind + boxes, "Fake gate: a gap between two boxes")):
+        pts, _ = oc.scan_to_robot_points(pt.raycast_scan(segs, 0.0, 0.0, 0.0, 360))
+        found = oc.detect_gaps(pts, 0.0, oc.NORTH_DEG)
+        keep = oc._line_closed
+        oc._line_closed = lambda *a: True
+        candidate = oc.detect_gaps(pts, 0.0, oc.NORTH_DEG)[0]  # what the other checks accept
+        oc._line_closed = keep
+        a, b, ctr = candidate["a"], candidate["b"], candidate["center"]
+        along = (b - a) / np.hypot(*(b - a))
+        normal = np.array((-along[1], along[0]))
+        if (lidar - ctr) @ normal > 0:
+            normal = -normal
         for (px, py), (qx, qy) in segs:
             ax.plot([px, qx], [py, qy], color="saddlebrown", lw=3, zorder=1)
-        wp = to_world(pts, x, y, h)
-        ax.scatter(wp[:, 0], wp[:, 1], s=5, c="k", zorder=3)
-        # The zone that must be empty: between the edges (3 cm in), 2-30 cm beyond the gap line
-        half = g0["width"] / 2.0 - 0.03
-        zone = [ctr_w + tan_w * u + nrm_w * v for u, v in ((-half, 0.02), (half, 0.02), (half, oc.GAP_OPEN_DEPTH), (-half, oc.GAP_OPEN_DEPTH))]
-        ax.add_patch(Polygon(zone, closed=True, fc="gold", ec="goldenrod", alpha=0.35, zorder=2,
-                             label=f"must be empty (2-{oc.GAP_OPEN_DEPTH * 100:.0f} cm beyond)"))
-        found = [g for g in gaps if np.hypot(*(to_world([g["center"]], x, y, h)[0] - ctr_w)) < 0.2]
-        if found:
-            g = found[0]
-            near = oc._bearing_sorted(pts, oc.GAP_DETECT_RANGE)
-            nn = len(near)
-            ext = np.concatenate((near, near, near))
-            ia = next(k for k in range(nn, 2 * nn) if np.allclose(ext[k], g["a"]))
-            jb = next(k for k in range(ia + 1, 3 * nn) if np.allclose(ext[k], g["b"]))
-            for run in (oc._axis_wall_end(ext, ia, -1, axes), oc._axis_wall_end(ext, jb, +1, axes)):
-                rw = to_world(run, x, y, h)
-                ax.plot(rw[:, 0], rw[:, 1], color="tab:blue", lw=6, alpha=0.6, zorder=4)
-            ab = to_world([g["a"], g["b"]], x, y, h)
-            ax.plot(ab[:, 0], ab[:, 1], color="limegreen", lw=5, zorder=5, label=f"gate {g['width']:.2f} m: accepted")
-            ax.plot([], [], color="tab:blue", lw=6, alpha=0.6, label="straight X/Y wall-end runs")
-        else:
-            ax.plot([a_w[0], b_w[0]], [a_w[1], b_w[1]], color="red", lw=4, ls="--", zorder=5, label="same gap: rejected")
-        ax.add_patch(Polygon(pt.footprint(x, y, h), closed=True, fc="steelblue", ec="k", zorder=5))
+        # Beams to points more than GATE_CLOSED_DEPTH beyond the line: where do they cross it?
+        depth = (pts - ctr) @ normal
+        bad = good = 0
+        for p in pts[depth > oc.GATE_CLOSED_DEPTH]:
+            lidar_depth = (lidar - ctr) @ normal
+            fr = lidar_depth / (lidar_depth - (p - ctr) @ normal)
+            u = abs((lidar + fr * (p - lidar) - ctr) @ along)
+            if u <= candidate["width"] / 2 + oc.GATE_CLOSED_EDGE_MARGIN:
+                col, good = "tab:green", good + 1
+            elif u <= oc.GATE_CLOSED_EXTENT:
+                col, bad = "red", bad + 1
+            else:
+                continue
+            ax.plot([lidar[0], p[0]], [lidar[1], p[1]], color=col, lw=0.8, alpha=0.6, zorder=2)
+        ax.scatter(pts[:, 0], pts[:, 1], s=5, c="k", zorder=3)
+        # The gate line, checked out to GATE_CLOSED_EXTENT from the gap centre, and the depth band
+        e0, e1 = ctr - along * oc.GATE_CLOSED_EXTENT, ctr + along * oc.GATE_CLOSED_EXTENT
+        ax.plot([e0[0], e1[0]], [e0[1], e1[1]], color="gray", ls="--", lw=1.2, zorder=3)
+        band = [e0 + normal * oc.GATE_CLOSED_DEPTH, e1 + normal * oc.GATE_CLOSED_DEPTH]
+        ax.plot([band[0][0], band[1][0]], [band[0][1], band[1][1]], color="gray", ls=":", lw=1, zorder=3)
+        ok = bool(found)
+        ax.plot([a[0], b[0]], [a[1], b[1]], color="limegreen" if ok else "red", lw=5, ls="-" if ok else "--", zorder=5)
+        ax.add_patch(Polygon(pt.footprint(0, 0, 0), closed=True, fc="steelblue", ec="k", zorder=5))
+        ax.plot([], [], color="tab:green", label=f"beam through the gap: allowed ({good})")
+        ax.plot([], [], color="red", label=f"beam past the line outside the gap ({bad})")
+        ax.plot([], [], color="gray", ls="--", label=f"gate line, checked to {oc.GATE_CLOSED_EXTENT:.0f} m each side")
+        ax.plot([], [], color="gray", ls=":", label=f"{oc.GATE_CLOSED_DEPTH * 100:.0f} cm beyond the line")
         ax.set_aspect("equal")
-        ax.set_xlim(x - 1.1, x + 2.0)
-        ax.set_ylim(y - 1.3, y + 1.1)
+        ax.set_xlim(-0.5, 3.0)
+        ax.set_ylim(-1.8, 1.8)
         ax.grid(True, alpha=0.3)
-        ax.set_title(title, fontsize=10)
+        ax.set_title(title + (": line closed -> ACCEPTED" if ok else ": line not closed -> REJECTED"), fontsize=10)
         ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
-    fig.suptitle("Gate detection: an East-West gap between two straight wall ends, with nothing just beyond it", fontsize=11)
+    fig.suptitle("Closed-line check: apart from the gap itself, nothing may be seen beyond the gate line", fontsize=11)
     save_png(fig, "gate_detection")
 
 # ---------------------------------------------------------------- 9. gate manoeuvre (clip)
