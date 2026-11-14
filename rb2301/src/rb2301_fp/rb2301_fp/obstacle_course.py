@@ -63,8 +63,6 @@ OBSTACLE_GAP = 0.2           # Corridor points further apart than this belong to
 OBJECT_MATCH_DISTANCE = 0.15  # Turn lock: an obstacle this close to where the locked obstacle was on the
                               # previous scan is the same object. The lock is released only when the
                               # locked object has no points left in the corridor.
-KEEP_TURN_ON_OBSTACLE_CHANGE = True  # When the locked obstacle leaves but another is already within
-                              # TURN_DISTANCE, keep the same turn direction (no back-and-forth)
 TURN_CHECK_RADIUS = 0.14      # Side check while turning: obstacle within this distance of the BODY EDGE, in the
                               # front zone the turn sweeps (front-left for a left turn, front-right for right) (m)
 REAR_SIDE_CLEARANCE = 0.05    # Same for the rear zone (rear-right for a left turn, rear-left for right); the rear
@@ -173,7 +171,7 @@ BOARD_MIN_DETECTIONS = 15     # A travel axis is confident after this many detec
 BOARD_MIN_TRAVEL = 0.20       # ...covering at least this much sideways travel (m)
 BOARD_MOVING_TRAVEL = 0.10    # A track that moved at least this far sideways is a moving board (m)
 BOARD_COUNT = 2               # Boards to cross. SCAN looks for ONE board at a time and runs again after each
-                              # crossing, until this many are crossed (0 = until a scan finds nothing)
+                              # crossing, until this many are crossed
 BOARD_SCAN_FALLBACK_TIME = 12.0  # SCAN: after this long, take the nearest board that moved at all, even if not confident (s)
 BOARD_NONE_TIME = 6.0         # SCAN: NOTHING moving at all within this long -> no (more) boards, drive on normally (s).
                               # On the first scan that means a FALSE gate: it is ignored from then on and gate
@@ -202,7 +200,7 @@ BOARD_WAIT_MAX_TIME = 30.0    # WAIT timeout: cross if the path is clear, else g
 
 
 def scan_to_robot_points(msg) -> tuple:
-    '''LaserScan -> (points Nx2 in robot frame [x forward, y left], ranges N). Invalid returns dropped.'''
+    '''Convert a LaserScan into robot-frame (x forward, y left) points and their ranges.'''
     ranges = np.asarray(msg.ranges, dtype=float)
     angles = float(msg.angle_min) + np.arange(ranges.size) * float(msg.angle_increment) + LASER_YAW_OFFSET
     valid = np.isfinite(ranges) & (ranges > max(float(msg.range_min), 0.01))
@@ -214,16 +212,7 @@ def scan_to_robot_points(msg) -> tuple:
 
 
 def analyse_front_corridor(points:np.ndarray, ranges:np.ndarray) -> dict:
-    '''Look only inside the rectangular front corridor and describe what blocks it.
-    If several obstacles are in the corridor, only the one nearest the robot is considered.
-
-    Returns nearest (m, raw LiDAR range of the closest corridor point, inf if clear),
-    blocking ("clear" | "right" | "left" | "whole"), whole (True if the obstacle covers most of the
-    corridor width) and turn (+1 left, -1 right, 0 none):
-      - blocked on the right only -> turn left; on the left only -> turn right
-      - whole front blocked -> right (fallback only)
-    _obstacle_avoidance() decides the actual turn with the side cones; this "turn" is only its tie-break
-    (partly blocked: away from the obstacle; whole front: the goal side, this fallback without a heading).'''
+    '''Find the nearest obstacle in the front corridor and label how it blocks it.'''
     inside = (points[:, 0] > 0.0) & (points[:, 0] <= CORRIDOR_LENGTH) & (np.abs(points[:, 1]) <= CORRIDOR_HALF_WIDTH)
     result = {"nearest": math.inf, "blocking": "clear", "turn": 0, "obstacles": 0,
               "whole": False, "clusters": [], "first_points": np.empty((0, 2))}
@@ -283,33 +272,16 @@ def analyse_front_corridor(points:np.ndarray, ranges:np.ndarray) -> dict:
 
 
 def side_cone_depths(scan_msg, with_angles:bool=False) -> tuple:
-    '''How open each side of the corridor is. Each side searches a sector (SIDE_CONE_ANGLE_DEG
-    +- SIDE_CONE_HALF_WIDTH_DEG from straight ahead, seen from the LiDAR) with a narrow sub-cone
-    (+-SIDE_SUBCONE_HALF_WIDTH_DEG), stepping SIDE_SUBCONE_STEP_DEG. A sub-cone's depth is the median
-    range of its beams (no return = SIDE_CONE_MAX_RANGE), so one beam through a crack doesn't count.
-    The side's depth is its deepest sub-cone, so a narrow opening anywhere in the sector is found.
-    Returns (left, right), or (left, right, left_angle_deg, right_angle_deg) with with_angles: the
-    robot-frame bearings of the deepest sub-cones (positive = left).'''
-    ranges = np.asarray(scan_msg.ranges, dtype=float)
-    angles = float(scan_msg.angle_min) + np.arange(ranges.size) * float(scan_msg.angle_increment) + LASER_YAW_OFFSET
-    angles = (angles + math.pi) % (2.0 * math.pi) - math.pi  # Robot-frame bearing, 0 = straight ahead
-    valid = np.isfinite(ranges) & (ranges > max(float(scan_msg.range_min), 0.01))
-    depth = np.where(valid, np.minimum(ranges, SIDE_CONE_MAX_RANGE), SIDE_CONE_MAX_RANGE)
-    half = math.radians(SIDE_SUBCONE_HALF_WIDTH_DEG)
+    '''Measure how open each side of the corridor is (deepest sub-cone per side).'''
     lo = SIDE_CONE_ANGLE_DEG - SIDE_CONE_HALF_WIDTH_DEG + SIDE_SUBCONE_HALF_WIDTH_DEG
     hi = SIDE_CONE_ANGLE_DEG + SIDE_CONE_HALF_WIDTH_DEG - SIDE_SUBCONE_HALF_WIDTH_DEG
     centres = np.arange(lo, max(hi, lo) + 1e-6, SIDE_SUBCONE_STEP_DEG)
 
     def deepest(side):
-        best_depth, best_angle = -1.0, side * SIDE_CONE_ANGLE_DEG
-        for centre_deg in centres:
-            centre = side * math.radians(centre_deg)
-            diff = (angles - centre + math.pi) % (2.0 * math.pi) - math.pi
-            in_cone = np.abs(diff) <= half
-            d = float(np.median(depth[in_cone])) if np.any(in_cone) else SIDE_CONE_MAX_RANGE
-            if d > best_depth:
-                best_depth, best_angle = d, side * float(centre_deg)
-        return best_depth, best_angle
+        '''Deepest sub-cone on one side: (depth, bearing deg).'''
+        depths = _cone_depths(scan_msg, side * centres, SIDE_SUBCONE_HALF_WIDTH_DEG)
+        k = int(np.argmax(depths))
+        return float(depths[k]), side * float(centres[k])
 
     left_depth, left_angle = deepest(+1)
     right_depth, right_angle = deepest(-1)
@@ -319,21 +291,14 @@ def side_cone_depths(scan_msg, with_angles:bool=False) -> tuple:
 
 
 def side_cone_scores(scan_msg, heading_deg, target_heading_deg, corridor, north_deg=None) -> tuple:
-    '''Score of each side for choosing a turn: its cone depth, plus SIDE_CONE_GOAL_BONUS for the goal side
-    (no bonus without a heading).
-    Goal side, with north_deg (world direction of north, deg): for each side, the world direction of its
-    deepest sub-cone; its angle to NORTH and to EAST; the smaller of the two. The side with the smaller
-    one is the goal side (equal -> the side target_heading_deg is on). Without north_deg: the side
-    target_heading_deg is on (used while steering to a gate's alignment point).
-    Also stores depths, best sub-cone angles, scores and the goal side in corridor (for logging /
-    drawing). Returns (left, right, goal_side).'''
+    '''Score each side for a turn: its cone depth plus a bonus for the goal side.'''
     left_depth, right_depth, left_angle, right_angle = side_cone_depths(scan_msg, with_angles=True)
     goal_side = 0
-    left_off = right_off = None
     if heading_deg is not None:
         goal_side = +1 if wrap_deg(target_heading_deg - float(heading_deg)) > 0.0 else -1
         if north_deg is not None:
             def off_north_east(cone_angle):
+                '''Smaller of the angles from this cone's world direction to north and to east.'''
                 world = float(heading_deg) + cone_angle
                 return min(abs(wrap_deg(world - north_deg)), abs(wrap_deg(world - (north_deg - 90.0))))
             left_off, right_off = off_north_east(left_angle), off_north_east(right_angle)
@@ -343,41 +308,47 @@ def side_cone_scores(scan_msg, heading_deg, target_heading_deg, corridor, north_
     right_score = right_depth + (SIDE_CONE_GOAL_BONUS if goal_side < 0 else 0.0)
     corridor.update({"cone_left": left_depth, "cone_right": right_depth,
                      "cone_left_angle": left_angle, "cone_right_angle": right_angle,
-                     "cone_left_score": left_score, "cone_right_score": right_score, "cone_goal_side": goal_side,
-                     "cone_left_off_ne": left_off, "cone_right_off_ne": right_off})
+                     "cone_left_score": left_score, "cone_right_score": right_score, "cone_goal_side": goal_side})
     return left_score, right_score, goal_side
 
 
 def _min_distance(a:np.ndarray, b:np.ndarray) -> float:
-    '''Smallest distance between any point of a and any point of b.'''
+    '''Smallest distance between two point sets.'''
     if len(a) == 0 or len(b) == 0:
         return math.inf
     return float(np.min(np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1])))
 
 
-def _sweep_threat(points:np.ndarray, direction:int) -> int:
-    '''Side check for a turn in `direction` (+1 left, -1 right): is anything in the area the body
-    sweeps (front zone within TURN_CHECK_RADIUS, rear zone within REAR_SIDE_CLEARANCE of the body edge)?
-    Returns the side (+1 left, -1 right) of the nearest obstacle in either sweep zone, or 0 if clear.'''
+def _sweep_zones(points:np.ndarray, front_radius:float, rear_radius:float) -> tuple:
+    '''Find the points the body would sweep into when turning left or right.'''
+    # Distance from each point to the body outline (rectangle: ROBOT_REAR behind to BODY_FRONT ahead of the rear
+    # axle, +-BODY_HALF_WIDTH wide); 0 inside the body. Turning about the rear axle, a LEFT turn sweeps the
+    # front-left and rear-right of the body, a RIGHT turn the front-right and rear-left.
     dx = np.maximum.reduce([-ROBOT_REAR - points[:, 0], np.zeros(len(points)), points[:, 0] - BODY_FRONT])
     dy = np.maximum(np.abs(points[:, 1]) - BODY_HALF_WIDTH, 0.0)
     dist = np.hypot(dx, dy)
-    near_front, near_rear = dist < TURN_CHECK_RADIUS, dist < REAR_SIDE_CLEARANCE
+    near_front, near_rear = dist < front_radius, dist < rear_radius
     front, rear = points[:, 0] > 0.0, points[:, 0] <= 0.0
     left, right = points[:, 1] > 0.0, points[:, 1] < 0.0
-    left_turn_zone = (near_front & front & left) | (near_rear & rear & right)
-    right_turn_zone = (near_front & front & right) | (near_rear & rear & left)
-    zone = left_turn_zone if direction > 0 else right_turn_zone
-    if not np.any(zone):
+    left_zone = (near_front & front & left) | (near_rear & rear & right)
+    right_zone = (near_front & front & right) | (near_rear & rear & left)
+    return left_zone, right_zone, dist
+
+
+def _sweep_threat(points:np.ndarray, direction:int, front_radius:float=TURN_CHECK_RADIUS,
+                  rear_radius:float=REAR_SIDE_CLEARANCE) -> int:
+    '''Side of the nearest point the body would hit when turning, or 0 if clear.'''
+    left_zone, right_zone, dist = _sweep_zones(points, front_radius, rear_radius)
+    if not np.any(left_zone if direction > 0 else right_zone):
         return 0
-    both = left_turn_zone | right_turn_zone
-    threat = points[both][int(np.argmin(dist[both]))]
-    return +1 if threat[1] > 0.0 else -1
+    # Turn away from the NEAREST point in either sweep zone (not only the turn's own): there may be something
+    # even closer on the other side, and turning away from the farther one would drive into it.
+    both = left_zone | right_zone
+    return +1 if points[both][int(np.argmin(dist[both]))][1] > 0.0 else -1
 
 
 def _cone_depths(scan_msg, centres_deg, half_deg:float=HEADING_CONE_HALF_DEG) -> np.ndarray:
-    '''Depth of narrow cones at the given robot-frame bearings (deg, 0 = straight ahead, + = left): the
-    median range of the beams in each cone (no return = SIDE_CONE_MAX_RANGE).'''
+    '''Depth (median range) of narrow cones at the given bearings.'''
     ranges = np.asarray(scan_msg.ranges, dtype=float)
     angles = float(scan_msg.angle_min) + np.arange(ranges.size) * float(scan_msg.angle_increment) + LASER_YAW_OFFSET
     valid = np.isfinite(ranges) & (ranges > max(float(scan_msg.range_min), 0.01))
@@ -391,12 +362,7 @@ def _cone_depths(scan_msg, centres_deg, half_deg:float=HEADING_CONE_HALF_DEG) ->
 
 
 def choose_goal_heading(scan_msg, heading_deg:float, target_deg:float, north_deg:float, state:dict) -> tuple:
-    '''World heading for the heading hold (deg). First: if the robot already heads within
-    HEADING_ON_COURSE_DEG around target_deg (north-east), keep its current heading (no steering).
-    Else target_deg if its direction is open (HEADING_OPEN_DEPTH); else a detour: the open direction closest to NORTH or EAST (smaller of its two
-    angles; deeper wins a tie), kept in state["detour_deg"] until north-east opens again or the detour
-    direction gets blocked. Nothing open -> target_deg (normal avoidance does the work).
-    Returns (heading deg, label for the log).'''
+    '''Choose the heading to hold when the corridor is clear (on course, north-east, or a detour).'''
     if abs(wrap_deg(heading_deg - target_deg)) <= HEADING_ON_COURSE_DEG / 2.0:
         state["detour_deg"] = None
         return heading_deg, "on course (keep going)"
@@ -423,19 +389,7 @@ def choose_goal_heading(scan_msg, heading_deg:float, target_deg:float, north_deg
 
 
 def _obstacle_avoidance(scan_msg, lock, heading_deg=None, target_heading_deg=None, north_deg=None) -> tuple:
-    '''One control step from a LaserScan.
-
-    lock is the turn lock from the previous step: None, or a dict with
-      direction (+1 left, -1 right), points (the locked obstacle's corridor points, robot frame)
-      and heading (robot heading in deg when those points were seen).
-    A turn is locked onto the obstacle that caused it and is kept until THAT obstacle has left
-    the corridor, even if other obstacles appear or it is further than TURN_DISTANCE.
-    heading_deg is the robot's world heading; when given and nothing is locked, the robot turns
-    back toward target_heading_deg (default TARGET_HEADING_DEG, north-east).
-    north_deg (world direction of north) switches the side-cone goal side to "closest to north or east"
-    (see side_cone_scores).
-    Returns (forward m/s, turn rad/s, new lock, corridor).
-    Pure function (no ROS), so pocket_test.py can run exactly the same logic.'''
+    '''One step of corridor obstacle avoidance: speed, turn choice, turn lock and safety checks.'''
     if target_heading_deg is None:
         target_heading_deg = TARGET_HEADING_DEG
     points, ranges = scan_to_robot_points(scan_msg)
@@ -469,7 +423,7 @@ def _obstacle_avoidance(scan_msg, lock, heading_deg=None, target_heading_deg=Non
     # No lock: start one when the first obstacle is within TURN_DISTANCE
     corridor["lock_handover"] = False
     if lock is None and nearest < TURN_DISTANCE:
-        if KEEP_TURN_ON_OBSTACLE_CHANGE and corridor["lock_released"]:
+        if corridor["lock_released"]:
             # Hand-over: the locked obstacle just left but another one is already close. Keep turning
             # the same way (and keep backing up if it was) instead of re-deciding from the new
             # obstacle, so the robot doesn't swing back and forth between two obstacles.
@@ -554,32 +508,11 @@ def _obstacle_avoidance(scan_msg, lock, heading_deg=None, target_heading_deg=Non
     corridor["side_blocked"] = corridor["side_turn_given_up"] = False
     holding = lock is not None and lock.get("side_hold", False)  # Was side blocked on the previous step
     margin = SIDE_CLEAR_HYSTERESIS if holding else 0.0  # Hysteresis: must clear by a bit more to release
-    check_radius = TURN_CHECK_RADIUS + margin
-    corridor["side_check_radius"] = check_radius if turn_direction != 0 else 0.0
-    if turn_direction != 0 and check_radius > 0.0:
-        # Distance from each point to the body outline (rectangle: ROBOT_REAR behind to BODY_FRONT ahead
-        # of the rear axle, +-BODY_HALF_WIDTH wide); 0 inside the body
-        dx = np.maximum.reduce([-ROBOT_REAR - points[:, 0], np.zeros(len(points)), points[:, 0] - BODY_FRONT])
-        dy = np.maximum(np.abs(points[:, 1]) - BODY_HALF_WIDTH, 0.0)
-        dist = np.hypot(dx, dy)
-        near_front = dist < check_radius
-        near_rear = dist < REAR_SIDE_CLEARANCE + margin
-        front, rear = points[:, 0] > 0.0, points[:, 0] <= 0.0
-        left, right = points[:, 1] > 0.0, points[:, 1] < 0.0
-        left_turn_zone = (near_front & front & left) | (near_rear & rear & right)
-        right_turn_zone = (near_front & front & right) | (near_rear & rear & left)
-        left_min = float(np.min(dist[left_turn_zone])) if np.any(left_turn_zone) else math.inf
-        right_min = float(np.min(dist[right_turn_zone])) if np.any(right_turn_zone) else math.inf
-        zone = left_turn_zone if turn_direction > 0 else right_turn_zone
-        if np.any(zone):
-            # The intended turn's sweep zone is blocked. Turn away from the NEAREST obstacle in either
-            # sweep zone (not only the intended turn's): there may be something even closer on the
-            # other side, and turning away from the farther one would drive into it.
-            both = left_turn_zone | right_turn_zone
-            threat = points[both][int(np.argmin(dist[both]))]
-            corridor["side_blocked"] = True
-            corridor["threat_side"] = +1 if threat[1] > 0.0 else -1
-        corridor["left_turn_clearance"], corridor["right_turn_clearance"] = left_min, right_min
+    corridor["side_check_radius"] = TURN_CHECK_RADIUS + margin if turn_direction != 0 else 0.0
+    if turn_direction != 0:
+        threat_side = _sweep_threat(points, turn_direction, TURN_CHECK_RADIUS + margin, REAR_SIDE_CLEARANCE + margin)
+        if threat_side != 0:
+            corridor["side_blocked"], corridor["threat_side"] = True, threat_side
 
     if lock is not None:
         if corridor["side_blocked"] and not holding:
@@ -603,10 +536,8 @@ def _obstacle_avoidance(scan_msg, lock, heading_deg=None, target_heading_deg=Non
 
     # Heading hold: with no obstacle within TURN_DISTANCE, steer toward target_heading_deg (north-east, or a
     # detour from choose_goal_heading).
-    corridor["heading_error"] = None
     if lock is None and heading_deg is not None and nearest >= HEADING_HOLD_CLEARANCE:
         error = math.radians(wrap_deg(target_heading_deg - float(heading_deg)))
-        corridor["heading_error"] = math.degrees(error)
         turn = float(np.clip(HEADING_GAIN * error, -MAX_TURN_SPEED, MAX_TURN_SPEED))
         # Side check for the heading-hold turn too: don't steer the body into something beside it
         # (e.g. a wall corner that is ignored by the corridor because it only grazes the edge).
@@ -618,25 +549,19 @@ def _obstacle_avoidance(scan_msg, lock, heading_deg=None, target_heading_deg=Non
     return forward, turn, lock, corridor
 
 def _bearing_sorted(points:np.ndarray, max_range:float) -> np.ndarray:
-    '''Points closer than max_range, sorted by bearing as seen from the LiDAR (the scan's own order).
-    Anything closer that casts a shadow on a wall then sits between the shadow's two edges, so a shadow
-    never looks like a gap or a corner.'''
+    '''Nearby scan points sorted by bearing as seen from the LiDAR.'''
     near = points[np.hypot(points[:, 0], points[:, 1]) < max_range]
     return near[np.argsort(np.arctan2(near[:, 1], near[:, 0] - LASER_X_OFFSET))]
 
 
 def _wall_step(p:np.ndarray) -> np.ndarray:
-    '''Largest gap between neighbouring scan points on one wall, at point(s) p (robot frame): grows with
-    the range from the LiDAR, because the beams spread apart further away.'''
+    '''Largest neighbour spacing still counted as the same wall at each point.'''
     r = np.hypot(p[..., 0] - LASER_X_OFFSET, p[..., 1])
     return np.maximum(GATE_WALL_STEP, GATE_WALL_STEP_PER_M * r)
 
 
 def _axis_wall_end(near:np.ndarray, i:int, step:int, axes):
-    '''Is near[i] the end of a straight wall running along one of the world axes? Walks from near[i] in
-    index direction step (bearing order) collecting neighbouring points (_wall_step() apart, up to
-    GATE_WALL_LENGTH from the end). axes = world X and Y unit vectors in the robot frame.
-    Returns the wall piece (points, robot frame), or None if it isn't one.'''
+    '''Check whether a point is the end of a long, straight, X- or Y-axis wall.'''
     end, j, piece = near[i], i, [near[i]]
     while 0 <= j + step < len(near):
         nxt = near[j + step]
@@ -650,7 +575,7 @@ def _axis_wall_end(near:np.ndarray, i:int, step:int, axes):
     from_end = np.hypot(*(piece - end).T)
 
     def straight(run, k):
-        '''First k points of run within GATE_WALL_STRAIGHTNESS of their own best-fit line?'''
+        '''Are the first k points of the run on a straight line?'''
         centred = run[:k] - run[:k].mean(axis=0)
         fit_normal = np.linalg.svd(centred, full_matrices=False)[2][1]
         return np.max(np.abs(centred @ fit_normal)) <= GATE_WALL_STRAIGHTNESS
@@ -682,9 +607,7 @@ def _axis_wall_end(near:np.ndarray, i:int, step:int, axes):
 
 
 def _line_closed(points:np.ndarray, a:np.ndarray, b:np.ndarray) -> bool:
-    '''Is the gate line through a and b (robot frame) closed except for the gap a-b? False if a scan point
-    lies more than GATE_CLOSED_DEPTH beyond the line (away from the LiDAR) and its beam crossed the line
-    outside the gap, within GATE_CLOSED_EXTENT of the gap centre.'''
+    '''Check that the gate line is a solid wall apart from the gap itself.'''
     lidar = np.array((LASER_X_OFFSET, 0.0))
     centre = (a + b) / 2.0
     width = float(np.hypot(*(b - a)))
@@ -708,16 +631,7 @@ def _line_closed(points:np.ndarray, a:np.ndarray, b:np.ndarray) -> bool:
 
 
 def detect_gaps(points:np.ndarray, heading_deg:float, north_deg:float) -> list:
-    '''Find the gate (robot frame): two scan points GAP_MIN_WIDTH..GAP_MAX_WIDTH apart, each the END of a
-    straight wall along the world X or Y axis (within GATE_WALL_TOLERANCE), with the gap running East-West
-    within GATE_GAP_ALIGN_DEG and the space just beyond it empty.
-    The two ends need not be neighbours in bearing order: points between them are allowed if they are
-    BEYOND the gap line (things seen through the opening, e.g. a cylinder behind the gate) - they must
-    still be further than GAP_OPEN_DEPTH. Uses the whole 360 deg scan, every point within GAP_DETECT_RANGE.
-    Gaps in ANY direction are returned (front / behind is decided by the caller from which side of the gap
-    line the robot is on, not from where the robot happens to face). heading_deg = robot heading,
-    north_deg = world direction of north (both deg). Returns a list of dicts with center, normal (unit, pointing
-    through the gap away from the robot), width, a, b.'''
+    '''Find gate candidates in the scan: East-West gaps between two straight wall ends.'''
     th = math.radians(heading_deg)
     c, s = math.cos(th), math.sin(th)
     axes = (np.array((c, -s)), np.array((s, c)))  # World X and Y axes in the robot frame
@@ -779,19 +693,19 @@ def detect_gaps(points:np.ndarray, heading_deg:float, north_deg:float) -> list:
 
 
 def _to_world(q, x, y, c, s):
+    '''Convert a robot-frame point to the world frame.'''
     return np.array((x + c * q[0] - s * q[1], y + s * q[0] + c * q[1]))
 
 
 def _new_board_crossing(here:np.ndarray, direction:np.ndarray, east:np.ndarray=None) -> dict:
-    '''State for board_crossing_command(), started right after passing the gate. east = world unit vector
-    pointing East (SIDE moves that way), or None (SIDE picks the side with more room).'''
+    '''Initial state for the board crossing.'''
     return {"phase": "SCAN", "origin": here.copy(), "dir": direction / np.linalg.norm(direction), "east": east,
             "tracks": [], "axis": None, "board": 0, "calls": 0, "t": 0.0, "stamp": None, "latest": {},
             "phase_t": 0.0, "side_done": False, "side_start": None}
 
 
 def _scan_stamp(scan_msg):
-    '''Scan time in seconds from its header, or None (fake scans in pocket_test have no header).'''
+    '''Timestamp of a scan in seconds, or None if it has none.'''
     header = getattr(scan_msg, "header", None)
     if header is None:
         return None
@@ -800,8 +714,7 @@ def _scan_stamp(scan_msg):
 
 
 def _detect_boards(world_pts, lidar_w, origin, d, t, robot_along) -> list:
-    '''Board-like clusters ahead (world frame): short sideways, thin along the travel direction.
-    Returns (depth along d, lateral centre, lateral min, lateral max) per board.'''
+    '''Find board-like clusters ahead of the robot.'''
     rel = world_pts - origin
     along, lat = rel @ d, rel @ t
     keep = ((along > robot_along + 0.05) & (along < robot_along + BOARD_SCAN_DEPTH)
@@ -827,21 +740,20 @@ def _detect_boards(world_pts, lidar_w, origin, d, t, robot_along) -> list:
 
 
 def _travel(tr, since=None) -> float:
-    '''Sideways travel of a board track (all of it, or only detections at/after time since).'''
+    '''Sideways distance a board track has covered.'''
     lats = tr["lats"] if since is None else [l for l, ts in zip(tr["lats"], tr["ts"]) if ts >= since]
     return max(lats) - min(lats) if lats else 0.0
 
 
 def _board_safe_to_cross(b:dict, tr:dict, det, robot_lat:float, half_path:float) -> tuple:
-    '''WAIT decision for one board. Returns (cross?, reason text, board in path now?).
-    Uses only the last BOARD_RECENT_TIME s of the board's motion, because a swung board slows down and its
-    swing gets shorter: it is never assumed to reach the far ends it reached earlier.'''
+    '''Decide whether it is safe to cross a board now.'''
     now = b["t"]
     waited = now - b["phase_t"]
     recent = [(ts, l, lo, hi) for ts, l, lo, hi in zip(tr["ts"], tr["lats"], tr["los"], tr["his"])
               if ts >= now - BOARD_RECENT_TIME]
 
     def in_path(lo, hi):
+        '''Does this lateral span overlap the robot's path?'''
         return lo - robot_lat < half_path and hi - robot_lat > -half_path
 
     if det is None:
@@ -886,24 +798,7 @@ def _board_safe_to_cross(b:dict, tr:dict, det, robot_lat:float, half_path:float)
 
 
 def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
-    '''Cross the moving (swinging) boards after the gate. Only active after passing a gap (state["boards"] set).
-
-      SCAN:     stand still and watch until ONE board travel axis ahead is confidently detected (boards
-                are thin obstacles at a fixed depth that move sideways; detections within 8% of their
-                distance belong to the same axis) - the nearest one. After BOARD_SCAN_FALLBACK_TIME it
-                takes the nearest board that moved at all. Nothing moving at all for BOARD_NONE_TIME ->
-                no (more) boards, drive on normally (first scan: a false gate). Runs again after every
-                board crossed.
-      SIDE:     before the first board only: turn to face EAST, drive until the east wall is just ahead
-                (BOARD_SIDE_WALL_CLEARANCE), then FACE north again.
-      APPROACH: drive straight up to just before the board's axis.
-      WAIT:     go as soon as the board is not in front and is moving away toward the LONGER end of its
-                swing (it needn't pass in front first); also if it stopped or no longer reaches the path.
-                Judged only from its recent motion (see _board_safe_to_cross). Never waits forever.
-      CROSS:    drive straight until the whole body is past the axis; then SCAN for the next board. If the
-                board swings into the path before the body reaches it, stop and go back to WAIT.
-    After BOARD_COUNT boards (or when a SCAN sees nothing moving) normal driving resumes.
-    Returns (forward m/s, turn rad/s, state, corridor).'''
+    '''One step of the board-crossing state machine (SCAN, SIDE, FACE, APPROACH, WAIT, CROSS).'''
     b = state["boards"]
     b["calls"] += 1
     x, y, heading_deg = float(pose[0]), float(pose[1]), float(pose[2])
@@ -959,6 +854,7 @@ def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
         b["latest"] = latest
 
     def enter(phase):
+        '''Switch to a new phase and note when it started.'''
         b["phase"], b["phase_t"] = phase, now
 
     front_along = robot_along + BODY_FRONT
@@ -967,6 +863,7 @@ def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
 
     if b["phase"] == "SCAN":
         def depth(i):
+            '''Depth of a board track along the travel direction.'''
             return float(np.median(b["tracks"][i]["depths"]))
         ahead = [i for i in range(len(b["tracks"])) if depth(i) > front_along]  # Boards still to cross
         confident = [i for i in ahead
@@ -1000,6 +897,7 @@ def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
         det = b["latest"].get(b["axis"])
 
         def board_in_path():
+            '''Is the board currently in the robot's path?'''
             return det is not None and det[2] - robot_lat < half_path and det[3] - robot_lat > -half_path
 
         if b["phase"] == "SIDE":
@@ -1049,7 +947,7 @@ def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
         if b["phase"] == "CROSS":
             if rear_along >= axis + 2 * BOARD_HALF_THICKNESS + BOARD_CLEAR_MARGIN:
                 b["board"] += 1
-                if BOARD_COUNT and b["board"] >= BOARD_COUNT:
+                if b["board"] >= BOARD_COUNT:
                     state["boards"] = None  # All boards crossed: back to normal driving
                     corridor["board_phase"] = "done"
                     return 0.0, turn, state, corridor
@@ -1076,8 +974,7 @@ def board_crossing_command(scan_msg, state:dict, pose) -> tuple:
 
 
 def _start_boards(state:dict, scan_msg, pose, gate_center, north, east) -> tuple:
-    '''The gate has been passed: hand over to board_crossing_command() (find the moving boards, move toward
-    the east wall, then cross them going north). Happens once.'''
+    '''Mark the gate as passed and start the board crossing.'''
     here = np.array((float(pose[0]), float(pose[1])))
     state["gate_passed"] = True
     state["gap"] = None
@@ -1090,25 +987,7 @@ def _start_boards(state:dict, scan_msg, pose, gate_center, north, east) -> tuple
 
 
 def _avoidance_core(scan_msg, state:dict, pose=None) -> tuple:
-    '''One control step from a LaserScan.
-
-    state is a dict kept by the caller between steps (start with {}); it holds the turn lock, the gate
-    manoeuvre and the board crossing. pose is (x, y, heading_deg) in the world frame, or None (no gate
-    detection and no heading hold without it).
-    Normally runs the obstacle avoidance (see _obstacle_avoidance). Every step, until the gate is passed,
-    it looks for the gate (a gap between two X- or Y-axis wall ends, running East-West, see detect_gaps):
-      BACK  (gap centre south of the robot) -> board crossing right away
-      FRONT (gap centre north of the robot) -> the gate manoeuvre:
-        APPROACH: normal obstacle avoidance, but steering toward the alignment point (on the gap's
-                  centre line, GAP_MIN..MAX_STANDOFF before the gap) instead of north-east
-        ALIGN:    once within GAP_ALIGN_START_DISTANCE of that point with nothing close ahead,
-                  line up precisely on the centre line
-        TURN:     turn on the spot to face through the gap
-        GO:       drive through, on until the body's rear is GATE_GO_PAST beyond the gate line -> board crossing
-    Board crossing (board_crossing_command): find the moving boards, move toward the east wall, then
-    cross them one at a time going north.
-    Returns (forward m/s, turn rad/s, state, corridor).
-    Called by avoidance_command(), which first adds the virtual dead-end walls to the scan.'''
+    '''One control step: board crossing, gate manoeuvre, or normal obstacle avoidance.'''
     heading_deg = None if pose is None else float(pose[2])
 
     # After passing the gate: the moving-board crossing takes over until both boards are crossed
@@ -1263,8 +1142,7 @@ def _avoidance_core(scan_msg, state:dict, pose=None) -> tuple:
 
 
 def _with_virtual_walls(scan_msg, pose, walls):
-    '''Copy of the scan with the virtual dead-end walls (world segments) ray-cast into it, so every
-    part of the controller sees them as real walls.'''
+    '''Copy of the scan with the virtual dead-end walls added.'''
     ranges = np.asarray(scan_msg.ranges, dtype=float).copy()
     x, y, th = float(pose[0]), float(pose[1]), math.radians(float(pose[2]))
     sx, sy = x + LASER_X_OFFSET * math.cos(th), y + LASER_X_OFFSET * math.sin(th)
@@ -1289,8 +1167,7 @@ def _with_virtual_walls(scan_msg, pose, walls):
 
 
 def _update_deadends(state:dict, corridor:dict, pose) -> None:
-    '''Count back-ups per spot; after DEADEND_BACKUPS at the same spot (facing the same way), put a
-    virtual wall across it.'''
+    '''Add a virtual wall where the robot keeps backing out of the same spot.'''
     backing = bool(corridor.get("backing"))
     started = backing and not state.get("was_backing", False)
     state["was_backing"] = backing
@@ -1321,14 +1198,7 @@ def _update_deadends(state:dict, corridor:dict, pose) -> None:
 
 
 def avoidance_command(scan_msg, state:dict, pose=None) -> tuple:
-    '''One control step from a LaserScan.
-
-    state is a dict kept by the caller between steps (start with {}); pose is (x, y, heading_deg) in
-    the world frame, or None (then no gap manoeuvre, heading hold or dead-end memory).
-    Virtual dead-end walls (see _update_deadends) are ray-cast into the scan first, then the normal
-    controller runs (_avoidance_core: obstacle avoidance, gap manoeuvre, board crossing).
-    Returns (forward m/s, turn rad/s, state, corridor).
-    Pure function (no ROS), so pocket_test.py can run exactly the same logic.'''
+    '''Main entry point: one control step from a scan and a pose.'''
     walls = state.get("virtual_walls", [])
     if pose is not None and walls:
         scan_msg = _with_virtual_walls(scan_msg, pose, walls)
@@ -1340,26 +1210,19 @@ def avoidance_command(scan_msg, state:dict, pose=None) -> tuple:
 
 
 def wrap_deg(angle:float) -> float:
-    '''Wrap an angle in degrees into [-180, 180).'''
+    '''Wrap an angle into [-180, 180) degrees.'''
     return (angle + 180.0) % 360.0 - 180.0
 
 def optitrack_to_maze(x:float, y:float, heading_deg:float, frame:dict) -> tuple:
-    '''Optitrack-frame pose (x, y, heading in degrees) -> CA2 maze-frame pose (see optitrack_variables.config).'''
+    '''Convert an OptiTrack pose to the maze frame.'''
     dx, dy = x - frame["origin_x"], y - frame["origin_y"]
     r = math.radians(frame["rotation_deg"])
     c, s = math.cos(r), math.sin(r)
     return (c * dx + s * dy, -s * dx + c * dy,
             wrap_deg(heading_deg - frame["rotation_deg"] - frame["heading_offset_deg"]))
 
-def maze_to_course(x:float, y:float, heading_deg:float, course:dict) -> tuple:
-    '''CA2 maze-frame pose -> final-project course frame (origin/rotation of the course in the maze frame, [course] in the config).'''
-    dx, dy = x - course["origin_x"], y - course["origin_y"]
-    r = math.radians(course["rotation_deg"])
-    c, s = math.cos(r), math.sin(r)
-    return (c * dx + s * dy, -s * dx + c * dy, wrap_deg(heading_deg - course["rotation_deg"]))
-
 def load_frame(robot_number:int) -> tuple:
-    '''Read optitrack_variables.config: returns (frame, course) for this robot.'''
+    '''Read the OptiTrack frame calibration for this robot.'''
     parser = configparser.ConfigParser()
     path = os.path.join(_PACKAGE_DIR, "optitrack_variables.config")
     if not parser.read(path):
@@ -1370,33 +1233,34 @@ def load_frame(robot_number:int) -> tuple:
     frame["heading_offset_deg"] = wrap_deg(-(frame["rotation_deg"] + 90.0)) if raw == "auto" else float(raw)
     if parser.has_section("heading_offsets") and parser.has_option("heading_offsets", str(robot_number)):
         frame["heading_offset_deg"] = parser.getfloat("heading_offsets", str(robot_number))
-    course = {k: parser.getfloat("course", k, fallback=0.0) for k in ("origin_x", "origin_y", "rotation_deg")}
-    return frame, course
+    return frame
 
 class LidarNode(Node):
+    '''Node that only checks whether the scan comes from simulation or the real LiDAR.'''
     def __init__(self):
-        """Node constructor"""
+        '''Subscribe to the scan.'''
         super().__init__("LidarNode")
         self.sub_scan = self.create_subscription(LaserScan, "scan", self.sub_scan_callback, 2) # Subscribe to lidar
         self.is_simulation = None
 
     def sub_scan_callback(self, msg):
-        """Scan subscriber"""
+        '''Detect simulation from the scan size.'''
         if len(msg.ranges) <= 360: 
             self.is_simulation = True
         else:
             self.is_simulation = False
 
 class ObstacleCourseNode(Node):
-    '''Node to navigate obstacle course, using pose from either gazebo odometer or optitrack and lidar scan data'''
+    '''Node that drives the obstacle course from the LiDAR scan and the pose.'''
     def __init__(self, is_simulation:bool=True, calibrate:bool=False):
+        '''Set up subscriptions, the publisher and the control timer.'''
         super().__init__('obstaclecourse')
         self.get_logger().info("Starting ObstacleCourseNode")
 
         self.is_simulation = is_simulation
         self.calibrate = calibrate # Real robot: only print poses, never drive
         self.raw_pose = None # Pose exactly as Optitrack reported it (real robot only)
-        self.frame = self.course = None
+        self.frame = None
         self._ticks = 0
 
         if is_simulation:
@@ -1414,7 +1278,7 @@ class ObstacleCourseNode(Node):
             # On the Bingda robots ROS_DOMAIN_ID is the robot's number, so the Optitrack topic is picked automatically
             domain = os.environ.get("ROS_DOMAIN_ID", "")
             self.robot_number = int(domain) if domain.isdigit() and 1 <= int(domain) <= 99 else 3
-            self.frame, self.course = load_frame(self.robot_number)
+            self.frame = load_frame(self.robot_number)
             self.get_logger().info(f"Reading pose from /vrpn_mocap/bingda_{self.robot_number:03d}/pose")
 
             self.map_sub = self.create_subscription( 
@@ -1428,7 +1292,6 @@ class ObstacleCourseNode(Node):
         self.timer = self.create_timer(0.05, self.timer_callback)  # Runs at 20Hz. Can be changed.
 
         self.pose = None
-        self.last_scan = None
         self.last_scan_msg = None # Full message, needed for the scan angles
         self.avoid_state = {}     # avoidance_command() memory: turn lock and gap manoeuvre
         if not is_simulation:
@@ -1437,22 +1300,17 @@ class ObstacleCourseNode(Node):
         self.corridor = None      # Latest analyse_front_corridor() result
 
     def sub_scan_callback(self, msg):
-        """Scan subscriber"""
+        '''Store the latest scan.'''
         self.last_scan_msg = msg
-        if len(msg.ranges) <= 360:
-            self.last_scan = np.array(msg.ranges)
-        else:
-            self.last_scan = np.array(msg.ranges)[::2]
 
     def yaw_from_quaternion(self, q):
-        '''Returns yaw angle (in rad) for orientation based on given quaternion input q'''
+        '''Yaw angle (rad) from a quaternion.'''
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         return np.arctan2(siny_cosp, cosy_cosp)
 
     def optitrack_callback(self, msg:PoseStamped):
-        '''Callback to calculate 2D pose info from Optitrack node. Pose info includes x and y coordinates, as well as heading in degrees.
-        This callback will run everytime the rclpy executor spins'''
+        '''Store the OptiTrack pose, converted to the maze frame.'''
         x, y = msg.pose.position.x, msg.pose.position.y
         heading = np.rad2deg(self.yaw_from_quaternion(msg.pose.orientation))
         self.raw_pose = np.array((x,y,heading))
@@ -1460,21 +1318,15 @@ class ObstacleCourseNode(Node):
         self.pose = np.array((x,y,heading))
         return self.pose
 
-    def to_course(self, pose=None):
-        '''Convert a pose [x, y, heading] (default: self.pose) from the CA2 maze frame to the final-project course frame. Optional; see [course] in optitrack_variables.config'''
-        pose = self.pose if pose is None else pose
-        return np.array(maze_to_course(pose[0], pose[1], pose[2], self.course)) if self.course else np.array(pose)
-
     def odometer_callback(self, msg):
-        '''Callback to calculate 2D pose info from Gazebo odomoter. Pose info includes x and y coordinates, as well as heading in degrees.
-        This callback will run everytime the rclpy executor spins'''
+        '''Store the Gazebo odometry pose.'''
         latest_pose_msg = msg.pose.pose 
         heading = np.rad2deg(self.yaw_from_quaternion(latest_pose_msg.orientation))
         self.pose = np.array((latest_pose_msg.position.x, latest_pose_msg.position.y, heading))
         return self.pose
 
     def move_2D(self, x:float=0.0, y:float=0.0, turn:float=0.0):
-        '''Publishes a Twist message to ROS to move a robot. Inputs are x and y linear velocities, as well as turn (z-axis yaw) angular velocity.'''
+        '''Publish a velocity command, capped to the robot's limits.'''
         twist_msg = Twist()
         x = np.clip(x, -self.max_translate_velocity, self.max_translate_velocity)
         y = np.clip(y, -self.max_translate_velocity, self.max_translate_velocity)
@@ -1484,7 +1336,7 @@ class ObstacleCourseNode(Node):
         self.publisher_.publish(twist_msg)
 
     def timer_callback(self):
-        """Controller loop. Insert path planning and PID control logic here"""
+        '''Control loop: run one controller step, publish it and log.'''
         if self.pose is None:
             print("No pose detected")
             return # Does not run if no pose received from Odom or Optitrack
@@ -1538,6 +1390,7 @@ class ObstacleCourseNode(Node):
                 
 
 def main(args=None):
+    '''Start the node (simulation or real robot is detected from the scan).'''
     arg_parser = argparse.ArgumentParser(description="RB2301 final project")
     arg_parser.add_argument('--calibrate', action='store_true', help="Real robot: only print the Optitrack pose and the maze-frame pose twice a second, never drive")
     cli_args, ros_args = arg_parser.parse_known_args(args=args)
