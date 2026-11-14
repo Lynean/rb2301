@@ -120,6 +120,11 @@ x = 0.114 + r·cos θ        y = r·sin θ
 
 Sorting by bearing from the LiDAR, rather than using the raw beam order, matters for two reasons. The backwards LiDAR's beam order wraps around straight ahead. And an object in front of a wall then sits between the two edges of its shadow, so a shadow never looks like a gap.
 
+![Beam order vs bearing order](media/fp/features/preprocess_bearing.png)
+
+*The same scan points in raw beam order (left) and sorted by bearing (right). Sorted, neighbours in the list are neighbours in the world, so a jump between two points marks a gap or an object edge.*
+
+
 **4. Time.** Board tracking needs real time between scans. It uses the scan header stamps, because the 20 Hz control loop runs faster than the 10 Hz LiDAR and sees the same scan more than once. Only a new stamp updates the board tracks. pocket_test has no stamps, so it counts 0.1 s per call.
 
 ## Main idea: the front corridor
@@ -133,6 +138,11 @@ The robot only reacts to what is in a rectangle straight ahead of it: 2.0 m long
 3. Drop edge slivers. An obstacle counts only if it reaches at least 20% of the corridor width in from the edge, or crosses the centre line. A wall that just grazes the corridor's edge is ignored.
 4. Keep only the obstacle that holds the nearest point. Its distance is `nearest`.
 5. Label it. Split the width into 8 bins. If fewer than 80% are occupied, it is a partial block ("left" or "right", by the mean y of its points). Otherwise it is a whole-front block. The label is only the tie-break when the side-cone scores are equal (Case 1).
+
+![Front corridor obstacle extraction](media/fp/features/corridor_extraction.png)
+
+*Only points inside the orange rectangle count. The wall grazing the edge is ignored as a sliver; the nearest obstacle (red) decides the speed and the turn; the one behind it waits its turn.*
+
 
 **Speed from distance.** The forward speed falls linearly from 0.22 m/s at 0.6 m to 0 at 0.17 m. Below 0.19 m the robot backs up at 0.1 m/s until the obstacle is 0.27 m away (Case 1 below).
 
@@ -181,14 +191,34 @@ The robot drives clear until an obstacle gets close, chooses a side once, and ho
 When the nearest obstacle is within 0.8 m, the robot picks a turn side once, locks it onto that obstacle, and keeps it until the obstacle leaves the corridor (`_obstacle_avoidance`).
 
 1. **Choosing the side: side cones.** Each side has a search sector centred 40° off straight ahead, ±40° wide. A narrow sub-cone (±7.5°) is stepped across the sector every 15°. A sub-cone's depth is the median range of its beams (no return = 6 m), so one beam through a crack does not count. The side's depth is its deepest sub-cone, so a narrow opening anywhere in the sector is found.
+
+    ![Side cones and sub-cones](media/fp/features/side_cones.png)
+
+    *Dashed: each side's search sector. Shaded wedges: the sub-cones (length = median depth); the dark one is each side's deepest. The goal side gets the bonus, and the higher score wins.*
+
 2. **Goal-side bonus.** For each side, take the world direction of its deepest sub-cone. Measure its angle to North and to East, and keep the smaller one. The side with the smaller angle is the goal side and gets +0.20 m on its score.
 3. **Decision.** Turn toward the higher score. If the scores are within 0.10 m (a tie), a partial block turns away from the obstacle, and a whole-front block turns to the goal side.
 4. **Turn lock.** The lock starts when there is no lock and the nearest obstacle is within 0.8 m. It stores the obstacle's points. On the next scan they are rotated by the robot's change in heading, and matched to the new obstacles (same object if within 0.15 m). The lock is released only when that object has no points left in the corridor, not when the corridor is clear. If another obstacle is already within 0.8 m at that moment, the lock is handed over with the same turn direction. This stops the robot swinging back and forth between two obstacles.
+
+    ![Turn lock clip](media/fp/features/turn_lock.gif)
+
+    *Each obstacle gets one turn (green = the side it turns to), held until that obstacle has left the corridor, then the lock is released or handed over.*
+
 5. **Cone switch.** While locked, the other side can take over only if it is the goal side and beats the current side by 0.15 m for 5 scans in a row. A switch is followed by a 20-step cooldown. If the other side won by 0.50 m or more, forward speed is capped at 0.10 m/s for 20 steps. This is a cap, so it has no effect if the robot is already slower.
 6. **Turn rate.** The turn rate grows as the obstacle gets closer (the opposite of the speed): 0.15 rad/s at 0.8 m, up to 0.8 rad/s at 0.17 m.
 7. **Side check.** The corridor only looks ahead, so a turn could swing the body into something beside it. Turning about the rear axle, a left turn sweeps the front-left and rear-right of the body, and a right turn the front-right and rear-left. If the turn's zone has a point within 0.14 m of the body edge at the front (0.05 m at the rear), the robot turns away from the nearest such point at 1.5 × the turn rate. It returns to its turn once the zone is clear by an extra 0.05 m. The lock keeps its direction meanwhile. If this happens 10 times in one lock, the turn is given up and the lock flips to the counter-turn side.
+
+    ![Side check sweep zones](media/fp/features/side_check.png)
+
+    *The zones a turn sweeps, measured from the body edge. Anything inside the current turn's zone makes the robot turn away until it is clear.*
+
 8. **Back-up.** Below 0.19 m the robot reverses at 0.1 m/s while still turning, until the obstacle is 0.27 m away. It never reverses into anything within 0.10 m behind the body.
 9. **Dead-end memory** (`_update_deadends`). Each back-up records where the front of the body was and which way it faced. After 5 back-ups within 0.30 m of each other and facing within 60°, a 0.60 m virtual wall is placed across that spot. The lock is reset so the turn is decided again with the wall in place. At most 10 walls are kept.
+
+    ![Back-up and dead-end clip](media/fp/features/deadend.gif)
+
+    *In a dead end the robot backs up while turning, tries again, and after 5 back-ups at the same spot places a virtual wall (orange dotted) across it, then chooses a new way.*
+
 
 ## Case 2: corridor clear
 
@@ -199,6 +229,11 @@ With nothing within 0.8 m and no lock, the robot steers toward a goal heading ch
 | 1. On course | Current heading within ±55° of north-east (a 110° window) | Current heading: no steering | on course (keep going) |
 | 2. North-east open | The cone toward north-east is at least 1.0 m deep | North-east | north-east |
 | 3. Detour | Otherwise | The open direction (1.0 m or more) closest to North or East, among candidates every 15° all round; deeper wins a tie | detour ±N deg |
+
+![Heading layers](media/fp/features/heading_layers.png)
+
+*Facing +70° (outside the gold 110° window) with north-east blocked, so layers 1 and 2 fail. Of the open candidate directions (green), the one closest to North or East is chosen (black arrow).*
+
 
 **Why three layers.** Steering straight to north-east all the time turned the robot into walls in narrow places. Layer 1 lets it keep driving along a corridor that already goes roughly the right way. Layer 3 gets it out when north-east is blocked by a wall, instead of pushing into it.
 
@@ -222,6 +257,11 @@ The gate is a gap between the ends of two long, straight walls, with the gap run
     The straightness test rejects cylinders. The longest-straight-run rule stops at a corner where a short gate wall meets another wall.
 6. **Closed line** (`_line_closed`). Apart from the gap itself, the gate line must be a solid wall. A point more than 0.20 m beyond the line fails the check if its beam crossed the line outside the gap (with a 3 cm edge margin) and within 1.0 m of the gap centre. Points seen through the gap, such as the boards, are allowed.
 7. **Empty beyond.** No point may lie 2–30 cm beyond the gap, between its edges.
+
+![Gate detection](media/fp/features/gate_detection.png)
+
+*Piece ends (orange crosses) are the candidate edges. The accepted gap (green) sits between two straight, axis-aligned wall-end runs (blue) and runs East–West; its centre is north of the robot, so it is a front gate.*
+
 
 **Front or back.** The caller decides this by where the gap centre is, not by which way the robot faces. Let *past* = (robot position − gap centre) · north.
 
@@ -274,6 +314,11 @@ A back gate skips the gate manoeuvre and goes straight to SCAN. If the gate mano
 
 During APPROACH and ALIGN the gap is detected again on each step, and its stored centre and direction are smoothed (70% old, 30% new). During TURN and GO it is not detected again; the stored line is used as it is. The manoeuvre gives up, and retries the gap 200 steps later, if APPROACH gets no 0.05 m closer in 100 steps, if the robot crosses the line without GO, or after 600 steps in total.
 
+![Gate manoeuvre clip](media/fp/features/gate_manoeuvre.gif)
+
+*APPROACH steers to the alignment point on the gap's centre line (dashed), ALIGN lines up on it, TURN faces the gap, and GO drives through on the stored line.*
+
+
 **Board crossing** (`board_crossing_command`). The boards are swung by hand. Their swing gets slower and shorter over time, and they are not flat. Only the last 6 s of a board's motion are used to judge it.
 
 | Phase | What the robot does | Moves on when |
@@ -295,6 +340,11 @@ In WAIT, the robot crosses when the board is not in its path (body half-width + 
 It waits if the board is moving toward the shorter end, because it will come back soon.
 
 **False gate.** If the first SCAN sees nothing moving, the gate was a false one. The "gate passed" flag is cleared and normal driving resumes, while gate detection keeps looking for the real gate. The false gap stays in the passed list, so it is not taken again.
+
+![Board crossing clip](media/fp/features/boards.gif)
+
+*SCAN finds one board's path (magenta dashed), SIDE drives to the east wall, FACE turns north, then APPROACH, WAIT (the caption shows why it waits or goes) and CROSS, once per board.*
+
 
 ## Iterative optimisation
 
