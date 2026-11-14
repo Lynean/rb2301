@@ -1,5 +1,7 @@
 # CA1: Obstacle Avoidance
 
+Paths on this page are relative to the ROS workspace, the `rb2301/` folder of this repo.
+
 The robot starts at one edge of a random field of cans (Coke cans in Gazebo) and has to reach the finish line on the far side without touching any. It uses only the LiDAR scan: no pose and no map. The robot can move sideways, so both controllers keep the heading fixed and steer by choosing a direction of travel (x forward, y sideways). Neither of them turns.
 
 - Package: `src/rb2301_ca1`

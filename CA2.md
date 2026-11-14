@@ -1,5 +1,7 @@
 # CA2: Path Planning
 
+Paths on this page are relative to the ROS workspace, the `rb2301/` folder of this repo.
+
 The robot has to drive through a known maze and reach a list of goal points in order, without touching a wall. Our solution plans every route with **RRT\*** on an inflated, higher-resolution copy of the occupancy grid. It then follows each route with a **carrot point** and a **heading PID**, driving like a car: forward, reverse and turning only, with no sideways motion (the bonus requirement).
 
 - Package: `src/rb2301_ca2`

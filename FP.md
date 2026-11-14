@@ -1,5 +1,7 @@
 # FP: Obstacle Course Controller
 
+Paths on this page are relative to the ROS workspace, the `rb2301/` folder of this repo.
+
 The controller drives the robot through the course toward north-east using only the LiDAR scan and the robot's pose. Every 0.05 s (20 Hz) it turns one scan and one pose into one velocity command (forward speed, turn rate). It runs the same way in Gazebo, in our 2-D test simulator (pocket_test) and on the real Bingda robot.
 
 - Package: `src/rb2301_fp`
