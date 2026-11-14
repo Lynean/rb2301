@@ -8,7 +8,7 @@ width = 22
 randomise = True # if false it will not change
 
 workspace_directory = os.path.dirname(os.path.realpath(__file__))[:-22]
-overwrite_file =  workspace_directory + '/rb2301_gz/worlds/obstacle_world_ca1.sdf'
+overwrite_file =  workspace_directory + '/rb2301_gz/worlds/obstacles_world_ca1.sdf'  # The world ca1_gazebo.launch.py loads
 obstacle_model = f'file:///{workspace_directory}/rb2301_gz/meshes/coke/6'
 
 def generate_maze(random_seed=None):

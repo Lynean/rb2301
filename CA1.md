@@ -32,7 +32,9 @@ ros2 launch rb2301_ca1 ca1.launch.py algo:=nhien random_seed:=7
 | --- | --- | --- |
 | `algo` | `nhien`, `max` | Which controller to run |
 | `scenario` | `random` (default), `front_left`, `front_right`, `diagonal_left` | Random field, or a fixed edge case around the spawn point |
-| `random_seed` | integer | Seed for the random field. Use the same seed to compare the two controllers on the same layout. |
+| `random_seed` | integer | Seed for the random field (required here). Use the same seed to compare the two controllers on the same layout. |
+
+`ca1_gazebo.launch.py` (used by both this launch and `gz_ca1.sh`) writes the layout into `obstacles_world_ca1.sdf` just before Gazebo loads it. On its own it takes the same `scenario` and `random_seed` arguments; with no seed it makes a new random layout every launch.
 
 Separately, with Gazebo in one terminal and the controller in another:
 
@@ -71,4 +73,4 @@ This controller looks only ahead and threads between neighbouring cans. It uses 
 
 ## Comparing the two
 
-Run both controllers on the same `random_seed` and compare the grader's output: time and path length to the finish line.
+Run both controllers with `ca1.launch.py` on the same `random_seed` and compare the grader's output: time and path length to the finish line.

@@ -1,6 +1,6 @@
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -9,10 +9,26 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Text
 
 import sys, os
 sys.path.insert(2, os.path.dirname(os.path.realpath(__file__))[:-16]+'/rb2301_ca1/rb2301_ca1')
-import obstacle_generator 
+import obstacle_generator
+
+
+def generate_world(context):
+    '''Write the can layout into the world file before Gazebo loads it (scenario and random_seed launch args).'''
+    scenario = LaunchConfiguration('scenario').perform(context)
+    seed = LaunchConfiguration('random_seed').perform(context).strip()
+    obstacle_generator.generate_sdf_file(scenario=scenario, random_seed=int(seed) if seed else None)
+    return []
+
+
 def generate_launch_description():
-    obstacle_generator.generate_sdf_file()
     ld = LaunchDescription()
+    ld.add_action(DeclareLaunchArgument(
+        'scenario', default_value='random',
+        description='Can layout: random, front_left, front_right or diagonal_left'))
+    ld.add_action(DeclareLaunchArgument(
+        'random_seed', default_value='',
+        description='Seed for the random layout (empty = a new layout every launch)'))
+    ld.add_action(OpaqueFunction(function=generate_world))
     pkg_rb2301_gz = FindPackageShare('rb2301_gz') 
     pkg_ros_gz_sim = FindPackageShare('ros_gz_sim')
 

@@ -386,7 +386,7 @@ def collides(segments, x, y, heading):
 # ---------------------------------------------------------------- simulation
 def simulate(scn, real=False):
     '''Run one scenario. Returns a list of per-step frames.'''
-    max_v = 0.3 if real else 1.4  # Same caps as ObstacleCourseNode.move_2D
+    max_v = 0.5 if real else 1.4  # Same caps as ObstacleCourseNode.move_2D
     n_beams = 720 if real else 360
     x, y, h = scn["start"][0], scn["start"][1], math.radians(scn["start"][2])
     state = {}  # avoidance_command() memory (turn lock, gap manoeuvre)
@@ -687,7 +687,7 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Seed for 'random' (default: new random map)")
     parser.add_argument("--trials", type=int, default=1, help="Number of random courses to run for 'random'")
     parser.add_argument("--no-anim", action="store_true", help="Skip the animation, only show final paths")
-    parser.add_argument("--real", action="store_true", help="Real-robot caps (0.3 m/s, 0.6 rad/s) and 720-beam scan")
+    parser.add_argument("--real", action="store_true", help="Real-robot caps (0.5 m/s, 1.0 rad/s) and 720-beam scan")
     parser.add_argument("--swing", action="store_true", help="Boards swing like hand-pushed pendulums (decaying, bent) instead of motorised")
     parser.add_argument("--headless", action="store_true", help="Print results only, no plots")
     args = parser.parse_args()

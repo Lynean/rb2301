@@ -21,4 +21,4 @@ source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 ```
 
-Run the scripts in `rb2301/` (`ca1.sh`, `ca2.sh`, `gz_ca2.sh` and so on) from that folder, after the build. Each project's page explains how to run it in simulation and on the real robot.
+Run the scripts in `rb2301/` (`ca1.sh`, `ca2.sh`, `gz_ca2.sh` and so on) from that folder, after the build. [HOW_TO_RUN.md](HOW_TO_RUN.md) shows how to run every project in simulation, including pocket_test for FP. Each project's page covers the real robot too.
