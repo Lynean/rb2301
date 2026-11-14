@@ -9,6 +9,7 @@ The controller drives the robot through the course toward north-east using only 
 
 ## Contents
 
+- [Demo (pocket_test)](#demo-pocket_test)
 - [Running](#running)
 - [Overview](#overview)
 - [Preprocessing](#preprocessing)
@@ -19,6 +20,19 @@ The controller drives the robot through the course toward north-east using only 
 - [Final state machine](#final-state-machine)
 - [Iterative optimisation](#iterative-optimisation)
 - [Appendix: key parameters](#appendix-key-parameters)
+
+## Demo (pocket_test)
+
+These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py` re-renders them). Blue box: robot. Orange strip: front corridor; red dots: scan points inside it. Purple: moving boards. Green bar: the gate being used. The caption shows the current state.
+
+**Full course** (random seed 2, hand-swung boards). Clear driving and avoidance, then the gate manoeuvre (APPROACH → ALIGN → TURN → GO). Then the boards: SCAN, SIDE to the east wall, FACE north, APPROACH, WAIT, CROSS, twice. Finishes in about 60 s.
+
+![Full course run](media/fp/fp_full_course.gif)
+
+| Narrow zigzag corridor | Reverse-C pocket ahead |
+| --- | --- |
+| ![Zigzag corridor run](media/fp/fp_zigzag.gif) | ![Pocket run](media/fp/fp_pocket.gif) |
+| Every corner is a locked turn: the cones pick the side, and the lock holds it until that wall has left the corridor. | The cones see the pocket's closed end and turn away early, then the heading layers take the robot round it. |
 
 ## Running
 
