@@ -69,6 +69,10 @@ These runs use the exact controller code in pocket_test (`media/fp/make_gifs.py`
 | Simulation | +x (0°) | −y | −45° |
 | Real robot (OptiTrack: +x = West, +y = South) | −y (−90°) | −x | −135° |
 
+![Simulation and real-robot frames](media/fp/frames.png)
+
+*The same compass in both frames. Headings are measured from +x, counter-clockwise, so north-east is −45° in simulation and −135° on the real robot.*
+
 All the decision logic is written as pure functions with no ROS code (`avoidance_command` and the functions it calls). That way pocket_test runs exactly the same logic as the robot.
 
 **Feature list**

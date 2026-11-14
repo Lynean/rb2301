@@ -8,6 +8,11 @@ ROS 2 (Jazzy, Gazebo Harmonic) workspace for the RB2301 assignments, run on the 
 | CA2: Path planning | `src/rb2301_ca2` | Visits a list of goals in a known maze. Plans with RRT* on the occupancy grid and follows the path with a carrot point and a heading PID, driving like a car (forward, reverse and turning only). | [CA2.md](CA2.md) |
 | FP: Obstacle course | `src/rb2301_fp` | Crosses the final-project course toward north-east: avoids obstacles with a front corridor and side cones, finds and drives through the gate, then crosses two swinging boards. | [FP.md](FP.md) |
 
+| CA1: obstacle avoidance | CA2: path planning | FP: obstacle course |
+| --- | --- | --- |
+| [![CA1](media/ca1/ca1_controllers.png)](CA1.md) | [![CA2](media/ca2/ca2_planner.png)](CA2.md) | [![FP](media/fp/fp_full_course.gif)](FP.md) |
+| Gap choice of both controllers in a can field | RRT* tree and routes on the inflated maze | A full course in pocket_test (17/20 random courses completed) |
+
 Shared packages:
 
 - `src/rb2301_gz`: Gazebo worlds, robot model and launch files for all three projects.

@@ -42,6 +42,10 @@ Nodes are also inserted into a k-d tree structure, but the nearest-node search i
 
 One tree serves every goal. For goal *k*, the start is the tree node nearest the previous goal (the root for the first goal), and the end is the node nearest goal *k*. The route goes up from the start to the **lowest common ancestor** of the two nodes, then down to the goal. That way the robot never has to return to the root.
 
+![CA2 planner](media/ca2/ca2_planner.png)
+
+*Left: the inflated planning map; the robot may enter the soft ring (it just costs more), never the hard ring. Right: one seeded run of the real planner code (`media/ca2/make_ca2_media.py`), the 2,000-node tree and the four routes. In this run route 2 ends about 0.8 m short of goal 2, because no tree node grew into the narrow soft-ring passage to it; the robot treats the end of the route as the goal, so it would turn back for goal 3 there. The tree is random on the robot, so this can happen in some runs and not others.*
+
 ### 4. Path following: carrot point (`get_carrot_target`)
 
 - Project the robot onto the closest remaining route segment, searching forward only so the carrot never moves back along the route.
@@ -57,6 +61,10 @@ The robot can move sideways, but this mode never uses it, imitating a car with a
 3. **Heading PID.** The turn rate comes from the robot-frame heading error: Kp 2.5, Ki 0.10 (integral clamped at ±1), Kd 0.05. The derivative is wrapped so crossing ±180° gives no spike. Turn demand is 1.5 times larger in reverse.
 4. **Speed.** Speed scales down when the carrot is close (within 0.15 m), when the heading error is large, and when the PID asks for a sharp turn. It stays between 10% and 70% of the speed limit, so the robot never stalls, and it is negative in reverse.
 5. **Turn limit.** The turn rate is capped at speed / 0.25 m (the minimum turning radius), but never below 0.8 rad/s, so the robot can still steer at low speed.
+
+![CA2 carrot and car-like control](media/ca2/ca2_carrot.png)
+
+*The carrot comes from the real `get_carrot_target()`: project the robot onto the route (black square), walk 0.6 m along it (orange), and chase that point (star). Left: carrot ahead, so the robot drives forward and the heading PID turns the front toward it. Right: carrot more than 90° behind, so the robot drives in reverse, treating its back as the front.*
 
 An alternative `drive_mode = "holonomic"` drives straight at the carrot with a PD controller on the x and y errors (sideways motion allowed).
 

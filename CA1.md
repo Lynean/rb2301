@@ -71,6 +71,12 @@ This controller looks only ahead and threads between neighbouring cans. It uses 
 5. **No gap: sidestep.** It slides at 0.25 m/s toward the side with more room (median range), and holds that side unless the other becomes clearly better. If that side is blocked close by, it swaps sides; if both are, it backs up. It also backs up if a can is within 0.20 m in front.
 6. **Leaving avoidance.** After the front clears, it keeps the last avoiding command for 8 readings before going straight again.
 
+## Both controllers on the same spot
+
+![CA1 controllers](media/ca1/ca1_controllers.png)
+
+*Both controllers' real code (`media/ca1/make_ca1_media.py`) run on one spot of a generated can field, from a simulated 720-beam scan (the real robot's LiDAR; `nhien` assumes one reading per degree after halving the scan, which holds for 720 beams but not for Gazebo's 360). Left, `nhien`: every open gap all round with its score; the back is masked; the arrow is the command `nhien()` actually sent, toward the best gap's centre. Right, `max`: only the front half up to 0.75 m; the front strip is blocked, so it looks for gaps between can clusters, and the arrow is the gap `choose_gap()` picked. In most blocked spots `max` finds no gap it accepts (or only one on the non-preferred side) and sidesteps instead.*
+
 ## Comparing the two
 
 Run both controllers with `ca1.launch.py` on the same `random_seed` and compare the grader's output: time and path length to the finish line.
