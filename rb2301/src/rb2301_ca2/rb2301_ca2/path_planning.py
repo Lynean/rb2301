@@ -167,6 +167,8 @@ class WaypointNode(Node):
         self.map_array = map_array
         self.origin = origin # World (x, y) coordinate of the grid's [0, 0] corner. Use with grid_to_world()/world_to_grid()
         self.resolution = resolution # Metres per grid cell (0.2). Use with grid_to_world()/world_to_grid()
+        self.map_upsample_factor = 3
+        self.planning_resolution = self.resolution / self.map_upsample_factor
 
         self.frame = frame # Optitrack->maze frame (real robot only), see optitrack_to_maze()
         self.expected_start = expected_start # Where this run says the robot should be placed (maze frame), real robot only
@@ -181,10 +183,44 @@ class WaypointNode(Node):
         #Nhien's Var
         self.goal_index = 0
         self.tree = None
+        self.processed_map = None
         self.current_node_index = 0
-        #Nhien PID
-        self.last_delta_x = 0
-        self.last_delta_y = 0
+        # Look roughly three original map-cell segments ahead.  The carrot
+        # walker below carries this distance across as many short RRT segments
+        # as necessary instead of stopping at the next waypoint.
+        self.carrot_lookahead_segments = 3.0
+        self.carrot_lookahead_distance = (
+            self.carrot_lookahead_segments * self.resolution
+        )
+        # Change this to "holonomic" to use the previous independent X/Y
+        # movement controller instead of car-like forward steering.
+        self.drive_mode = "car"
+        self.last_delta_x = 0.0
+        self.last_delta_y = 0.0
+        # Car-like path-following controller parameters.  The robot is
+        # holonomic, but this mode deliberately disables sideways motion and
+        # limits yaw rate to imitate a vehicle with a minimum turning radius.
+        self.heading_pid_kp = 2.5
+        self.heading_pid_ki = 0.10
+        self.heading_pid_kd = 0.05
+        self.heading_integral_limit = 1.0
+        self.heading_integral = 0.0
+        self.last_heading_error = 0.0
+        self.heading_pid_initialized = False
+        self.car_initial_alignment_tolerance = 0.10
+        self.car_initial_alignment_turn_rate = 4.0
+        self.car_initial_alignment_complete = False
+        self.car_min_turn_radius = 0.25
+        self.car_slowdown_distance = 0.15
+        self.car_min_drive_scale = 0.10
+        self.car_direction_switch_error = math.radians(90.0)
+        self.car_direction_switch_hysteresis = math.radians(5.0)
+        self.heading_pid_speed_slowdown_gain = 1.0
+        # angular.z is rad/s.  Use a stronger floor while aligning so the
+        # simulated chassis does not spend several seconds creeping around.
+        self.car_min_turn_rate = 0.80
+        self.car_reverse_turn_multiplier = 1.50
+        self.car_reversing = False
     
 
     def _print_calibration(self):
@@ -259,10 +295,26 @@ class WaypointNode(Node):
         twist_msg = Twist()
         x = np.clip(x, -max_translate_velocity, max_translate_velocity)
         y = np.clip(y, -max_translate_velocity, max_translate_velocity)
-        turn = np.clip(turn, -max_translate_velocity*2, max_translate_velocity*2)
+        # Linear and angular velocity use different units, so do not derive
+        # the yaw-rate limit from max_translate_velocity.  Initial alignment
+        # deliberately needs to publish +/-4 rad/s.
+        turn = np.clip(
+            turn,
+            -self.car_initial_alignment_turn_rate,
+            self.car_initial_alignment_turn_rate,
+        )
         twist_msg.linear.x, twist_msg.linear.y, twist_msg.linear.z = float(x), float(y), 0.0
         twist_msg.angular.x, twist_msg.angular.y, twist_msg.angular.z = 0.0, 0.0, float(turn)
         self.publisher_.publish(twist_msg)
+
+        now = time.time()
+        if now - getattr(self, "_last_command_log", 0.0) >= 1.0:
+            self._last_command_log = now
+            self.get_logger().debug(
+                f"cmd_vel: linear.x={float(x):+.3f}, "
+                f"linear.y={float(y):+.3f}, angular.z={float(turn):+.3f}, "
+                f"subscribers={self.publisher_.get_subscription_count()}"
+            )
 
     def set_waypoints(self, waypoints:list):
         '''Set new waypoints when a goal has been reached'''
@@ -270,12 +322,27 @@ class WaypointNode(Node):
         self.waypoints = waypoints
         self.current_waypoint_idx = 0
 
-    # Preprocess obstacles by giving every free cell next to a 99 a value of 75.
+    def reset_controllers(self):
+        '''Reset controller history when beginning or ending a path.'''
+        self.last_delta_x = 0.0
+        self.last_delta_y = 0.0
+        self.heading_integral = 0.0
+        self.last_heading_error = 0.0
+        self.heading_pid_initialized = False
+        self.car_initial_alignment_complete = False
+
+    # Upsample the occupancy grid, then apply two one-fine-cell bubbles:
+    # first a hard 99 ring, followed by a softer 75 ring.  Each ring is 1/3
+    # of an original cell because the planning map has 3x resolution.
     def preprocess_map(self) -> np.ndarray:
-        #Full copy
-        original_map = self.map_array.copy()
+        original_map = np.repeat(
+            np.repeat(self.map_array, self.map_upsample_factor, axis=0),
+            self.map_upsample_factor,
+            axis=1,
+        )
         processed_map = original_map.copy()
 
+        # Pass 1: expand original obstacles by one fine-grid cell as 99.
         for obstacle_x, obstacle_y in np.argwhere(original_map == 99):
             for offset_x in (-1, 0, 1):
                 for offset_y in (-1, 0, 1):
@@ -285,9 +352,84 @@ class WaypointNode(Node):
                     if (0 <= neighbour_x < original_map.shape[0]
                             and 0 <= neighbour_y < original_map.shape[1]
                             and original_map[neighbour_x, neighbour_y] == 0):
-                        processed_map[neighbour_x, neighbour_y] = 75
+                        processed_map[neighbour_x, neighbour_y] = 99
 
+        # Pass 2: expand the completed 99 region once more, but mark only
+        # remaining free cells as 75 so the hard-obstacle ring is preserved.
+        hard_bubbled_map = processed_map.copy()
+        for obstacle_x, obstacle_y in np.argwhere(hard_bubbled_map == 99):
+            for offset_x in (-1, 0, 1):
+                for offset_y in (-1, 0, 1):
+                    neighbour_x = obstacle_x + offset_x
+                    neighbour_y = obstacle_y + offset_y
+                    if (0 <= neighbour_x < hard_bubbled_map.shape[0]
+                            and 0 <= neighbour_y < hard_bubbled_map.shape[1]
+                            and hard_bubbled_map[neighbour_x, neighbour_y] == 0):
+                        processed_map[neighbour_x, neighbour_y] = 75
         return processed_map
+
+    def get_carrot_target(self) -> tuple:
+        '''Return a point a fixed distance ahead of the robot along the remaining path.'''
+        if len(self.path) == 1:
+            return self.path[0].pos
+
+        points = [np.asarray(node.pos, dtype=float) for node in self.path]
+        robot_position = np.asarray(self.pose[:2], dtype=float)
+        first_segment = min(self.current_node_index, len(points) - 2)
+
+        # Project the robot onto the closest remaining path segment.  Searching
+        # only forward prevents the carrot from moving back to completed path.
+        closest_segment = first_segment
+        closest_projection = points[first_segment]
+        closest_distance_squared = float("inf")
+
+        for segment_index in range(first_segment, len(points) - 1):
+            segment_start = points[segment_index]
+            segment_vector = points[segment_index + 1] - segment_start
+            segment_length_squared = float(np.dot(segment_vector, segment_vector))
+
+            if segment_length_squared == 0.0:
+                projection = segment_start
+            else:
+                projection_fraction = np.clip(
+                    np.dot(robot_position - segment_start, segment_vector)
+                    / segment_length_squared,
+                    0.0,
+                    1.0,
+                )
+                projection = segment_start + projection_fraction * segment_vector
+
+            distance_squared = float(np.dot(
+                robot_position - projection,
+                robot_position - projection,
+            ))
+            if distance_squared < closest_distance_squared:
+                closest_distance_squared = distance_squared
+                closest_segment = segment_index
+                closest_projection = projection
+
+        self.current_node_index = closest_segment
+
+        # Walk the requested lookahead distance from the projection, continuing
+        # across corners and shorter segments when necessary.
+        distance_left = self.carrot_lookahead_distance
+        carrot = closest_projection
+        segment_index = closest_segment
+
+        while segment_index < len(points) - 1:
+            segment_end = points[segment_index + 1]
+            remaining_vector = segment_end - carrot
+            remaining_length = float(np.linalg.norm(remaining_vector))
+
+            if remaining_length >= distance_left and remaining_length > 0.0:
+                carrot = carrot + remaining_vector * (distance_left / remaining_length)
+                return (float(carrot[0]), float(carrot[1]))
+
+            distance_left -= remaining_length
+            carrot = segment_end
+            segment_index += 1
+
+        return (float(points[-1][0]), float(points[-1][1]))
 
     def timer_callback(self):
         """Controller loop. Insert path planning and PID control logic here"""
@@ -296,7 +438,10 @@ class WaypointNode(Node):
         now = time.time()
         if now - getattr(self, "_last_pose_log", 0.0) >= 1.0: # at most once a second, so it does not bury the map / warnings below
             self._last_pose_log = now
-            self.get_logger().debug(f"Pose: {self.pose}")
+            self.get_logger().debug(
+                "Pose: x=%.3f m, y=%.3f m, heading=%+.2f deg"
+                % (self.pose[0], self.pose[1], self.pose[2])
+            )
 
         if self.calibrate:
             self._print_calibration()
@@ -309,7 +454,8 @@ class WaypointNode(Node):
 
         ###### INSERT CODE HERE ######
         if not self.tree:
-            processed_map = self.preprocess_map()
+            self.processed_map = self.preprocess_map()
+            processed_map = self.processed_map
             print("Calculating waypoints...")
             self.tree = Tree()
             self.tree.add_node(TreeNode(
@@ -325,11 +471,11 @@ class WaypointNode(Node):
                 #Random inside map expressed in world's coordination
                 rand_x = np.random.uniform(
                     self.origin[0],
-                    self.origin[0] + processed_map.shape[0] * self.resolution,
+                    self.origin[0] + processed_map.shape[0] * self.planning_resolution,
                 )
                 rand_y = np.random.uniform(
                     self.origin[1],
-                    self.origin[1] + processed_map.shape[1] * self.resolution,
+                    self.origin[1] + processed_map.shape[1] * self.planning_resolution,
                 )
 
                 # #Try rand_x,rand_y as grid coordinate -> Less uncertainty
@@ -352,11 +498,16 @@ class WaypointNode(Node):
                     new_node_pos,
                     processed_map,
                     self.origin,
-                    self.resolution,
+                    self.planning_resolution,
                 ):
                     continue
                 #Additional Cost for being near obstacle
-                new_node_grid = world_to_grid(new_node_pos[0], new_node_pos[1], self.origin, self.resolution)
+                new_node_grid = world_to_grid(
+                    new_node_pos[0],
+                    new_node_pos[1],
+                    self.origin,
+                    self.planning_resolution,
+                )
                 additional_cost = processed_map[new_node_grid[0], new_node_grid[1]]
 
                 new_node_cost = nearest_node.cost + self.tree.dist(
@@ -376,7 +527,7 @@ class WaypointNode(Node):
                     new_node,
                     processed_map,
                     self.origin,
-                    self.resolution,
+                    self.planning_resolution,
                     r=0.2,
                 )
 
@@ -395,59 +546,196 @@ class WaypointNode(Node):
             else:
                 start_node = self.tree.NearestNode(self.goal_list[self.goal_index-1][0], self.goal_list[self.goal_index-1][1])
             self.path = self.tree.path_to_goal(start_node, goal_node)
+            self.current_node_index = 0
+            self.reset_controllers()
             print("Tree Size:", len(self.tree.nodes))
-            print("Route length: ", len(self.path))
+            print("Route length:", len(self.path))
             self.print_map()
         else:
             
 
-            distance_to_node = self.tree.dist(
-                self.path[self.current_node_index].pos[0],
-                self.path[self.current_node_index].pos[1],
+            final_target = self.path[-1].pos
+            distance_to_goal = self.tree.dist(
+                final_target[0],
+                final_target[1],
                 self.pose[0],
                 self.pose[1],
             )
-            if distance_to_node < 0.1:
-                #End of path
-                if self.current_node_index >= len(self.path) - 1:
-                    print("END OF THIS PATH")
-                    self.path = []
-                    self.current_node_index = 0
-                    self.goal_index += 1
-                    self.move_2D(0,0,0)
-                    return
-                self.current_node_index += 1
-                print(
-                    "Going to X,Y: ",
-                    self.path[self.current_node_index].pos[0],
-                    self.path[self.current_node_index].pos[1],
+            if distance_to_goal < self.resolution * 0.75:
+                print("END OF THIS PATH")
+                self.path = []
+                self.current_node_index = 0
+                self.reset_controllers()
+                self.car_reversing = False
+                self.goal_index += 1
+                self.move_2D(0,0,0)
+                return
+
+            target = self.get_carrot_target()
+            delta_x = target[0] - self.pose[0]
+            delta_y = target[1] - self.pose[1]
+
+            if self.drive_mode == "holonomic":
+                # Preserved X/Y movement mode.  The PD output is normalized so
+                # it controls travel direction without exceeding the speed cap.
+                kp = 0.8
+                kd = 0.05
+                dt = 0.05  # timer_callback runs at 20 Hz
+                controlled_x = kp * delta_x + kd * (delta_x - self.last_delta_x) / dt
+                controlled_y = kp * delta_y + kd * (delta_y - self.last_delta_y) / dt
+                self.last_delta_x = delta_x
+                self.last_delta_y = delta_y
+
+                distance = math.hypot(controlled_x, controlled_y)
+                if distance > 0.0:
+                    self.move_2D(
+                        controlled_x / distance * max_translate_velocity / 2.0,
+                        controlled_y / distance * max_translate_velocity / 2.0,
+                        0.0,
+                    )
+            else:
+                # Car-like mode: use the front when the carrot is ahead and
+                # pretend the chassis is flipped 180 degrees when it is behind.
+                current_heading = math.radians(self.pose[2])
+                cos_heading = math.cos(current_heading)
+                sin_heading = math.sin(current_heading)
+
+                # Rotate the world-frame carrot vector into the robot frame:
+                # +x is in front of the robot and +y is to its left.
+                target_robot_x = cos_heading * delta_x + sin_heading * delta_y
+                target_robot_y = -sin_heading * delta_x + cos_heading * delta_y
+
+                distance = math.hypot(delta_x, delta_y)
+                forward_heading_error = math.atan2(target_robot_y, target_robot_x)
+
+                # Start every path by facing the carrot with the FRONT of the
+                # robot.  This is an open-loop turn: do not select reverse and
+                # do not update/apply the heading PID until alignment finishes.
+                if not self.car_initial_alignment_complete:
+                    self.car_reversing = False
+                    self.heading_integral = 0.0
+                    self.last_heading_error = 0.0
+                    self.heading_pid_initialized = False
+                    if abs(forward_heading_error) > self.car_initial_alignment_tolerance:
+                        initial_turn_rate = math.copysign(
+                            self.car_initial_alignment_turn_rate,
+                            forward_heading_error,
+                        )
+                        self.move_2D(0.0, 0.0, initial_turn_rate)
+                        return
+                    self.car_initial_alignment_complete = True
+
+                was_reversing = self.car_reversing
+                absolute_forward_error = abs(forward_heading_error)
+                if self.car_reversing:
+                    self.car_reversing = absolute_forward_error >= (
+                        self.car_direction_switch_error
+                        - self.car_direction_switch_hysteresis
+                    )
+                else:
+                    self.car_reversing = (
+                        absolute_forward_error > self.car_direction_switch_error
+                    )
+                if self.car_reversing != was_reversing:
+                    # The effective heading jumps by 180 degrees when the
+                    # driving direction changes, so discard stale PID history.
+                    self.heading_integral = 0.0
+                    self.last_heading_error = 0.0
+                    self.heading_pid_initialized = False
+
+                if self.car_reversing:
+                    # Flipping both robot-frame axes is equivalent to
+                    # pretending that the chassis heading is rotated 180 deg.
+                    heading_error = math.atan2(
+                        -target_robot_y,
+                        -target_robot_x,
+                    )
+                else:
+                    heading_error = math.atan2(target_robot_y, target_robot_x)
+
+                # Both distance and alignment affect longitudinal velocity.
+                # Far + aligned approaches full speed; close + steep becomes
+                # very slow.  Clamp the combined result below so multiplying
+                # the factors cannot produce a command below the motor's
+                # usable crawl speed.
+                distance_scale = np.clip(
+                    distance / self.car_slowdown_distance,
+                    0.0,
+                    1.0,
+                )
+                heading_scale = np.clip(math.cos(heading_error), 0.0, 1.0)
+                speed_scale = np.clip(
+                    distance_scale * heading_scale,
+                    self.car_min_drive_scale,
+                    0.7,
                 )
 
-            #PD
-            delta_x = self.path[self.current_node_index].pos[0] - self.pose[0]
-            delta_y = self.path[self.current_node_index].pos[1] - self.pose[1]
-            #PD logic
-            Kp = 0.8
-            Kd = 0.05
-            #set dt = 0.2 for now
-            dt = 0.2
+                # PID controls angular.z from the robot-frame heading error.
+                # Wrap the derivative so crossing +/-pi cannot create a spike.
+                dt = 0.05
+                self.heading_integral = np.clip(
+                    self.heading_integral + heading_error * dt,
+                    -self.heading_integral_limit,
+                    self.heading_integral_limit,
+                )
+                if self.heading_pid_initialized:
+                    heading_error_change = math.atan2(
+                        math.sin(heading_error - self.last_heading_error),
+                        math.cos(heading_error - self.last_heading_error),
+                    )
+                else:
+                    heading_error_change = 0.0
+                    self.heading_pid_initialized = True
+                desired_turn_rate = (
+                    self.heading_pid_kp * heading_error
+                    + self.heading_pid_ki * self.heading_integral
+                    + self.heading_pid_kd * heading_error_change / dt
+                )
+                self.last_heading_error = heading_error
 
-            delta_x = Kp*delta_x + Kd*(delta_x-self.last_delta_x)/dt
-            delta_y = Kp*delta_y + Kd*(delta_y-self.last_delta_y)/dt
+                if self.car_reversing:
+                    desired_turn_rate *= self.car_reverse_turn_multiplier
 
-            self.last_delta_x = delta_x
-            self.last_delta_y = delta_y
-            
-            distance = np.hypot(delta_x, delta_y)
+                # A larger heading-PID demand means the robot needs to turn
+                # more urgently, so reduce longitudinal speed smoothly.  The
+                # final clamp retains enough crawl speed to avoid stalling.
+                pid_speed_scale = 1.0 / (
+                    1.0
+                    + self.heading_pid_speed_slowdown_gain
+                    * abs(desired_turn_rate)
+                )
+                speed_scale = np.clip(
+                    speed_scale * pid_speed_scale,
+                    self.car_min_drive_scale,
+                    0.7,
+                )
 
-            if distance > 0:
-                direction_x = delta_x / distance
-                direction_y = delta_y / distance
-                
+                if self.car_reversing:
+                    # Crossing the configured error threshold changes the
+                    # polarity of linear.x without changing its base limit.
+                    speed_scale = -speed_scale
+
+                drive_speed = max_translate_velocity * speed_scale
+
+                # Keep steering available even at zero linear speed.  Reverse
+                # retains the same turn direction but gets a larger allowable
+                # angular rate for quicker corrections.
+                max_turn_rate = max(
+                    abs(drive_speed) / self.car_min_turn_radius,
+                    self.car_min_turn_rate,
+                )
+                if self.car_reversing:
+                    max_turn_rate *= self.car_reverse_turn_multiplier
+                turn_rate = np.clip(
+                    desired_turn_rate,
+                    -max_turn_rate,
+                    max_turn_rate,
+                )
+
                 self.move_2D(
-                    direction_x * max_translate_velocity/2,
-                    direction_y * max_translate_velocity/2,
-                    0,
+                    drive_speed,
+                    0.0,  # Car mode never commands sideways motion.
+                    turn_rate,
                 )
         ###### INSERT CODE HERE ######
 
@@ -524,10 +812,11 @@ class Tree:
     def dist(self, x1, y1, x2, y2) -> float:
         return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
-    #Preprocess the map_array obstacle to "bubble" up first (grids next to a 99 get set to 75)
+    # Preprocessing expands each obstacle by one fine-grid cell set to 99.
     def line_intersects_obstacle(self, pos1:tuple, pos2:tuple, map_array:np.ndarray,
-                                 origin:tuple, resolution:float) -> bool:
-        '''Return True if the world-coordinate segment from pos1 to pos2 crosses a grid cell containing 99.'''
+                                 origin:tuple, resolution:float,
+                                 obstacle_threshold:float=99) -> bool:
+        '''Return True if a world-coordinate segment crosses a cell at or above the occupancy threshold.'''
         start = np.asarray(pos1, dtype=float)
         end = np.asarray(pos2, dtype=float)
         line_length = self.dist(start[0], start[1], end[0], end[1])
@@ -539,7 +828,7 @@ class Tree:
             )
             if (grid_x < 0 or grid_x >= map_array.shape[0]
                     or grid_y < 0 or grid_y >= map_array.shape[1]
-                    or map_array[grid_x, grid_y] >= 99):
+                    or map_array[grid_x, grid_y] >= obstacle_threshold):
                 return True
 
         return False

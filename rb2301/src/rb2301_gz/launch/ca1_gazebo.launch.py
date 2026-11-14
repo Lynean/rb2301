@@ -1,19 +1,17 @@
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch.actions import SetEnvironmentVariable
-from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution, TextSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution, Command
 
 import sys, os
-sys.path.insert(2, os.path.dirname(os.path.realpath(__file__))[:-17]+'/rb2301_ca1/rb2301_ca1')
-print(os.path.dirname(os.path.realpath(__file__))[:-17])
-import obstacle_generator
-
-
+sys.path.insert(2, os.path.dirname(os.path.realpath(__file__))[:-16]+'/rb2301_ca1/rb2301_ca1')
+import obstacle_generator 
 def generate_launch_description():
+    obstacle_generator.generate_sdf_file()
     ld = LaunchDescription()
     pkg_rb2301_gz = FindPackageShare('rb2301_gz') 
     pkg_ros_gz_sim = FindPackageShare('ros_gz_sim')
@@ -31,18 +29,7 @@ def generate_launch_description():
     ld.add_action(arg_model)
 
     # for loading the model
-    resource_root = PathJoinSubstitution([pkg_rb2301_gz, '..'])
-    env_gz_sim = SetEnvironmentVariable(
-        "GZ_SIM_RESOURCE_PATH",
-        [
-            resource_root,
-            TextSubstitution(text=os.pathsep),
-            EnvironmentVariable("GZ_SIM_RESOURCE_PATH", default_value=""),
-        ],
-    )
-    ld.add_action(env_gz_sim)
-
-    env_gz = SetEnvironmentVariable("GAZEBO_MODEL_PATH", resource_root)
+    env_gz = SetEnvironmentVariable("GAZEBO_MODEL_PATH", pkg_rb2301_gz)
     ld.add_action(env_gz)
     env_lib_gl = SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "0") # 1 for VBox Users, 0 for non-Vbox users
     ld.add_action(env_lib_gl) # FOR VBOX USERS
@@ -51,36 +38,13 @@ def generate_launch_description():
     arg_world = DeclareLaunchArgument(
         'world', 
         # default_value='empty.sdf',
-        default_value='obstacle_world_ca1.sdf', # RB2301 CA1 Obstacles
+        default_value='obstacles_world_ca1.sdf', # RB2301 CA1 Obstacles
         description='Name of the Gazebo world file to load'
     )
     path_world = PathJoinSubstitution([
         pkg_rb2301_gz, 'worlds', LaunchConfiguration('world')
     ])
     ld.add_action(arg_world)
-
-    scenario_arg = DeclareLaunchArgument(
-        'scenario',
-        default_value='random',
-        description="Obstacle layout: random, front_left, front_right, <<>>, >><<, track_right_open, or track_left_open",
-    )
-    ld.add_action(scenario_arg)
-
-    random_seed_arg = DeclareLaunchArgument(
-        'random_seed',
-        default_value='0',
-        description='Seed used to generate the random obstacle maze',
-    )
-    ld.add_action(random_seed_arg)
-
-    def generate_obstacle_world(context):
-        obstacle_generator.generate_sdf_file(
-            LaunchConfiguration('scenario').perform(context),
-            random_seed=int(LaunchConfiguration('random_seed').perform(context)),
-        )
-        return []
-
-    ld.add_action(OpaqueFunction(function=generate_obstacle_world))
 
     # publishes the robot states into robot_description topic, along with transforms.
     robot_state_publisher_node = Node(
@@ -144,9 +108,9 @@ def generate_launch_description():
         package="ros_gz_bridge",
         executable="parameter_bridge",
         arguments=[
-            "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
+            "/clock@rosgraph_msgs/msg/Clockgz.msgs.Clock",
             "/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist",
-            "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+            "/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry",
             "/joint_states@sensor_msgs/msg/JointState@gz.msgs.Model",
             "/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V",
             "/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan",
@@ -161,3 +125,5 @@ def generate_launch_description():
     ld.add_action(gz_bridge_node)
 
     return ld
+
+

@@ -318,7 +318,7 @@ class ObstacleAvoidanceNode(Node):
                 vx, vy = self.get_sidestep_command(points, angles, ranges)
                 target = np.array([vx, vy])
 
-            self.last_command = (vx, vy)
+            self.last_command = (vx/2, vy/2)
 
         
         print(f"Moving to x={vx}, y={vy}")
