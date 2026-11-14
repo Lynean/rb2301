@@ -219,13 +219,13 @@ if wanted("corridor_extraction"):
 
 # ---------------------------------------------------------------- 3. side cones and sub-cones
 if wanted("side_cones"):
-    segs = pt.arena(5.0, 5.0) + pt.box(0.85, -0.05, 0.3, 0.5) + [((1.2, 0.55), (2.0, 0.85))] + pt.box(1.6, -0.9, 0.5, 0.3)
+    segs = pt.arena(8.0, 8.0) + pt.box(0.85, -0.05, 0.3, 0.5) + [((-0.3, 0.8), (3.0, 0.8))] + pt.box(2.3, -1.4, 0.5, 0.3)
     scn = {"segments": segs}
     x, y, hd = 0.0, 0.0, 0.0
     msg = scan_at(scn, x, y, hd)
     corridor = {}
     left, right, goal_side = oc.side_cone_scores(msg, hd, oc.TARGET_HEADING_DEG, corridor, oc.NORTH_DEG)
-    fig, ax = base_axes(scn, "Side cones: each side's deepest sub-cone, plus a bonus for the goal side", (-0.8, 3.2, -2.0, 2.0),
+    fig, ax = base_axes(scn, "Side cones: each side's deepest sub-cone (drawn up to 2.4 m), plus a goal-side bonus", (-0.8, 3.2, -2.0, 2.0),
                         size=(7.0, 7.0))
     pts, _ = oc.scan_to_robot_points(msg)
     ax.scatter(pts[:, 0], pts[:, 1], s=4, c="gray", zorder=3)
@@ -239,6 +239,10 @@ if wanted("side_cones"):
         for k, (cdeg, d) in enumerate(zip(side * centres, depths)):
             ax.add_patch(Polygon(pt.cone_polygon(x, y, 0.0, side, min(d, 2.4), cdeg, oc.SIDE_SUBCONE_HALF_WIDTH_DEG), closed=True,
                                  fc=colour, alpha=0.55 if k == best else 0.12, ec=colour if k == best else "none", zorder=2))
+        bdeg = math.radians(side * centres[best])
+        r = min(depths[best], 2.4) * 0.6
+        ax.text(oc.LASER_X_OFFSET + r * math.cos(bdeg), r * math.sin(bdeg), f"{depths[best]:.2f} m", fontsize=10, fontweight="bold",
+                color=colour, ha="center", va="center", bbox=dict(fc="white", ec=colour, alpha=0.9), zorder=8)
     draw_robot(ax, x, y, 0.0, corridor=True)
     win = "LEFT" if left > right else "RIGHT"
     caption(ax, f"left  depth {corridor['cone_left']:.2f} m  score {left:.2f}\n"
